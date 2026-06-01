@@ -8,7 +8,7 @@ export type LiveKitVideoGrant = {
   canPublish: boolean;
   canSubscribe: true;
   canPublishData: false;
-  canPublishSources?: ["screen_share"];
+  canPublishSources?: ["screen_share", "screen_share_audio"];
 };
 
 export function createScreenShareRoomName(meetingId: string) {
@@ -23,7 +23,7 @@ export function createLiveKitVideoGrant({ roomName, isPresenterOwner }: { roomNa
       canPublish: true,
       canSubscribe: true,
       canPublishData: false,
-      canPublishSources: ["screen_share"]
+      canPublishSources: ["screen_share", "screen_share_audio"]
     };
   }
 

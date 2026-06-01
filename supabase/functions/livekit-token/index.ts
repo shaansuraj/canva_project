@@ -13,7 +13,7 @@ type VideoGrant = {
   canPublish: boolean;
   canSubscribe: true;
   canPublishData: false;
-  canPublishSources?: ["screen_share"];
+  canPublishSources?: ["screen_share", "screen_share_audio"];
 };
 
 function createRoomName(meetingId: string) {
@@ -28,7 +28,7 @@ function createVideoGrant({ roomName, isPresenterOwner }: { roomName: string; is
       canPublish: true,
       canSubscribe: true,
       canPublishData: false,
-      canPublishSources: ["screen_share"]
+      canPublishSources: ["screen_share", "screen_share_audio"]
     };
   }
 

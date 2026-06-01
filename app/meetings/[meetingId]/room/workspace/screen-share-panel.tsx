@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { LiveKitRoom, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
+import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
 import { ConnectionState, Room, Track } from "livekit-client";
 import { FileText, Loader2, Maximize2, Minimize2, MonitorUp, PauseCircle, Square } from "lucide-react";
 
@@ -74,7 +74,7 @@ function ScreenShareStage({
     setBusyAction("start");
     setControlError(null);
     try {
-      await localParticipant.setScreenShareEnabled(true, { audio: false, video: true }, { source: Track.Source.ScreenShare });
+      await localParticipant.setScreenShareEnabled(true, { audio: true, video: true }, { source: Track.Source.ScreenShare });
       try {
         await onStarted();
       } catch (error) {
@@ -137,7 +137,7 @@ function ScreenShareStage({
           <div className={isCompact ? "max-w-xs p-3 text-center" : "max-w-sm p-6 text-center"}>
             <MonitorUp className={isCompact ? "mx-auto mb-2 h-6 w-6 text-white/70" : "mx-auto mb-3 h-10 w-10 text-white/70"} aria-hidden="true" />
             <p className={isCompact ? "text-xs font-black" : "font-black"}>Presenter screen will appear here</p>
-            {!isCompact ? <p className="mt-2 text-sm text-white/65">This room subscribes only to screen video. Microphone and camera tracks are never requested.</p> : null}
+            {!isCompact ? <p className="mt-2 text-sm text-white/65">This room subscribes to presenter screen video and shared tab/system audio only. Microphone and camera tracks are never requested.</p> : null}
           </div>
         )}
       </div>
@@ -246,7 +246,7 @@ export function ScreenSharePanel({
   return (
     <Card
       className={cn(
-        "border-white/70 bg-white/92 shadow-[0_28px_90px_-30px_rgba(15,23,42,0.65)] backdrop-blur-xl",
+        "border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-30px_rgba(0,0,0,0.9)] backdrop-blur-xl",
         isStage
           ? "relative overflow-hidden rounded-[2rem]"
           : isCompact
@@ -261,7 +261,7 @@ export function ScreenSharePanel({
               <MonitorUp className="h-5 w-5" aria-hidden="true" />
               {isStage ? "Live screen stage" : isCompact ? "Live screen" : "Screen share"}
             </CardTitle>
-            {!isCompact ? <CardDescription>LiveKit is used only for presenter screen video. No microphone, camera, mute, audio, or call controls are rendered.</CardDescription> : null}
+            {!isCompact ? <CardDescription className="text-slate-300">LiveKit carries presenter screen video plus shared tab/system audio. No microphone, camera, mute, or call controls are rendered.</CardDescription> : null}
           </div>
           <div className="flex items-center gap-2">
             {allowPresenterControls ? <Badge variant="success">Presenter</Badge> : <Badge variant="secondary">Viewer</Badge>}
@@ -283,7 +283,7 @@ export function ScreenSharePanel({
       </CardHeader>
       <CardContent className={isCompact ? "p-3 pt-0" : "p-4 pt-0 sm:p-5 sm:pt-0"}>
         {loading ? (
-          <div className={isCompact ? "flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-primary/20 bg-primary/5 text-xs text-muted-foreground" : "flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-primary/20 bg-primary/5 text-sm text-muted-foreground"}>
+          <div className={isCompact ? "flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/[0.07] text-xs text-slate-300" : "flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-white/15 bg-white/[0.07] text-sm text-slate-300"}>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
             Connecting to screen share...
           </div>
@@ -303,6 +303,7 @@ export function ScreenSharePanel({
             screen={false}
             onError={handleLiveKitError}
           >
+            <RoomAudioRenderer />
             <ScreenShareStage
               allowPresenterControls={allowPresenterControls}
               presentation={presentation}

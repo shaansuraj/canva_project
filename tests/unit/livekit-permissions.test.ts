@@ -41,7 +41,7 @@ function profile(role: Profile["role"], id = crypto.randomUUID()): Profile {
 }
 
 describe("phase 4 LiveKit permissions", () => {
-  it("creates presenter grants that can publish only screen share", () => {
+  it("creates presenter grants that can publish only screen share video and shared screen audio", () => {
     const grant = createLiveKitVideoGrant({ roomName: "meeting-123", isPresenterOwner: true });
 
     expect(grant).toMatchObject({
@@ -50,7 +50,7 @@ describe("phase 4 LiveKit permissions", () => {
       canPublish: true,
       canSubscribe: true,
       canPublishData: false,
-      canPublishSources: ["screen_share"]
+      canPublishSources: ["screen_share", "screen_share_audio"]
     });
   });
 

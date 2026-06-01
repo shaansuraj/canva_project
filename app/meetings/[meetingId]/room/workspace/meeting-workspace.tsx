@@ -1373,44 +1373,44 @@ export function MeetingWorkspace({
 
         <aside className="space-y-5 lg:sticky lg:top-4 lg:self-start">
           {canUsePresenterControls ? (
-            <Card className="bg-white/85 backdrop-blur">
+            <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
               <CardHeader>
                 <CardTitle>Presenter controls</CardTitle>
-                <CardDescription>Control annotation access, document lock state, page cleanup, and participant permissions.</CardDescription>
+                <CardDescription className="text-slate-300">Control annotation access, document lock state, page cleanup, and participant permissions.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid gap-2">
-                  <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} type="button" variant="outline">
+                  <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
                     {meeting.participant_annotation_enabled ? "Disable participant annotation" : "Enable participant annotation"}
                   </Button>
-                  <Button onClick={() => setDocumentLocked(!meeting.document_locked)} type="button" variant="outline">
+                  <Button onClick={() => setDocumentLocked(!meeting.document_locked)} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
                     {meeting.document_locked ? <LockOpen className="h-4 w-4" aria-hidden="true" /> : <Lock className="h-4 w-4" aria-hidden="true" />}
                     {meeting.document_locked ? "Unlock document" : "Lock document"}
                   </Button>
-                  <Button disabled={!selectedPage || pageAnnotations.length === 0} onClick={clearCurrentPageAnnotations} type="button" variant="outline">
+                  <Button disabled={!selectedPage || pageAnnotations.length === 0} onClick={clearCurrentPageAnnotations} type="button" variant="outline" className="border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white">
                     <Trash2 className="h-4 w-4" aria-hidden="true" />
                     Clear current page
                   </Button>
                 </div>
 
-                <div className="rounded-3xl bg-secondary/60 p-4 text-sm">
+                <div className="rounded-3xl border border-white/10 bg-white/[0.07] p-4 text-sm">
                   <p className="font-bold">Current page annotations</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Presenter can recolor, edit text annotations, or remove any annotation on the selected page.</p>
+                  <p className="mt-1 text-xs text-slate-300">Presenter can recolor, edit text annotations, or remove any annotation on the selected page.</p>
                   <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                    {pageAnnotations.length === 0 ? <p className="text-xs text-muted-foreground">No annotations on this page yet.</p> : null}
+                    {pageAnnotations.length === 0 ? <p className="text-xs text-slate-300">No annotations on this page yet.</p> : null}
                     {pageAnnotations.map((annotation) => (
-                      <div key={annotation.id} className="rounded-2xl border border-border/70 bg-white/80 p-3">
+                      <div key={annotation.id} className="rounded-2xl border border-white/10 bg-slate-900 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-bold">{annotation.user_name_snapshot}</p>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-xs text-slate-300">
                               {annotation.annotation_type} · {annotation.role_snapshot}
                             </p>
                           </div>
                           <span className="h-5 w-5 shrink-0 rounded-full border border-border" style={{ backgroundColor: annotation.color }} />
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-2">
-                          <Button onClick={() => updateAnnotation(annotation, { color })} size="sm" type="button" variant="outline">
+                          <Button onClick={() => updateAnnotation(annotation, { color })} size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
                             Use active color
                           </Button>
                           {annotation.annotation_type === "text" ? (
@@ -1426,15 +1426,16 @@ export function MeetingWorkspace({
                               size="sm"
                               type="button"
                               variant="outline"
+                              className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"
                             >
                               Edit text
                             </Button>
                           ) : (
-                            <Button disabled size="sm" type="button" variant="outline">
+                            <Button disabled size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white">
                               Edit shape
                             </Button>
                           )}
-                          <Button className="col-span-2" onClick={() => deleteAnnotation(annotation)} size="sm" type="button" variant="outline">
+                          <Button className="col-span-2 border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white" onClick={() => deleteAnnotation(annotation)} size="sm" type="button" variant="outline">
                             <Trash2 className="h-4 w-4" aria-hidden="true" />
                             Remove annotation
                           </Button>
@@ -1444,13 +1445,13 @@ export function MeetingWorkspace({
                   </div>
                 </div>
 
-                <div className="rounded-3xl bg-secondary/60 p-4 text-sm">
+                <div className="rounded-3xl border border-white/10 bg-white/[0.07] p-4 text-sm">
                   <p className="font-bold">Participant permissions</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Defaults allow annotation. Rows here override annotation, mute, and future download access.</p>
+                  <p className="mt-1 text-xs text-slate-300">Defaults allow annotation. Rows here override annotation, mute, and future download access.</p>
                 </div>
 
                 <div className="space-y-3">
-                  {participantControlRows.length === 0 ? <p className="text-sm text-muted-foreground">No participant attendance records yet.</p> : null}
+                  {participantControlRows.length === 0 ? <p className="text-sm text-slate-300">No participant attendance records yet.</p> : null}
                   {participantControlRows.map((participant) => {
                     const permission = permissions.find((item) => item.user_id === participant.user_id);
                     const canAnnotateParticipant = permission?.can_annotate ?? true;
@@ -1458,22 +1459,22 @@ export function MeetingWorkspace({
                     const canDownload = permission?.can_download ?? false;
 
                     return (
-                      <div key={participant.id} className="rounded-3xl border border-border/70 bg-white/75 p-4">
+                      <div key={participant.id} className="rounded-3xl border border-white/10 bg-white/[0.07] p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate font-bold">{participant.name_snapshot}</p>
-                            <p className="text-xs text-muted-foreground">{participant.designation_snapshot ?? "No designation"}</p>
+                            <p className="text-xs text-slate-300">{participant.designation_snapshot ?? "No designation"}</p>
                           </div>
                           <Badge variant={participant.is_present ? "success" : "outline"}>{participant.is_present ? "present" : "left"}</Badge>
                         </div>
                         <div className="mt-3 grid gap-2">
-                          <Button onClick={() => updateParticipantPermission(participant, { can_annotate: !canAnnotateParticipant })} size="sm" type="button" variant={canAnnotateParticipant ? "default" : "outline"}>
+                          <Button onClick={() => updateParticipantPermission(participant, { can_annotate: !canAnnotateParticipant })} size="sm" type="button" variant={canAnnotateParticipant ? "default" : "outline"} className={canAnnotateParticipant ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
                             {canAnnotateParticipant ? "Can annotate" : "Annotation off"}
                           </Button>
-                          <Button onClick={() => updateParticipantPermission(participant, { is_muted_from_annotation: !isMuted })} size="sm" type="button" variant={isMuted ? "default" : "outline"}>
+                          <Button onClick={() => updateParticipantPermission(participant, { is_muted_from_annotation: !isMuted })} size="sm" type="button" variant={isMuted ? "default" : "outline"} className={isMuted ? "bg-rose-500 font-black text-white hover:bg-rose-400" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
                             {isMuted ? "Muted from annotation" : "Not muted"}
                           </Button>
-                          <Button onClick={() => updateParticipantPermission(participant, { can_download: !canDownload })} size="sm" type="button" variant={canDownload ? "default" : "outline"}>
+                          <Button onClick={() => updateParticipantPermission(participant, { can_download: !canDownload })} size="sm" type="button" variant={canDownload ? "default" : "outline"} className={canDownload ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
                             {canDownload ? "Download allowed" : "Download blocked"}
                           </Button>
                         </div>
@@ -1485,18 +1486,18 @@ export function MeetingWorkspace({
             </Card>
           ) : null}
 
-          <Card className="bg-white/85 backdrop-blur">
+          <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
             <CardHeader>
               <CardTitle>Documents</CardTitle>
-              <CardDescription>PDF and images annotate immediately. PPT/PPTX is accepted with conversion fallback.</CardDescription>
+              <CardDescription className="text-slate-300">PDF and images annotate immediately. PPT/PPTX is accepted with conversion fallback.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {canUpload ? (
                 <div className="grid gap-3">
-                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-primary/30 bg-primary/5 p-5 text-center text-sm font-semibold text-primary">
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-300/35 bg-emerald-400/10 p-5 text-center text-sm font-black text-emerald-100">
                     {uploading || savingSnapshot ? <Loader2 className="mb-2 h-6 w-6 animate-spin" aria-hidden="true" /> : <FileUp className="mb-2 h-6 w-6" aria-hidden="true" />}
                     Upload PDF, image, PPT, or PPTX
-                    {selectedDocumentHasAnnotations ? <span className="mt-1 text-xs font-medium text-muted-foreground">You will be asked to save the current annotations first.</span> : null}
+                    {selectedDocumentHasAnnotations ? <span className="mt-1 text-xs font-medium text-slate-300">You will be asked to save the current annotations first.</span> : null}
                     <input
                       disabled={uploading || savingSnapshot}
                       className="sr-only"
@@ -1505,7 +1506,7 @@ export function MeetingWorkspace({
                       onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
                     />
                   </label>
-                  <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline">
+                  <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
                     {uploading || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
                     New whiteboard
                   </Button>
@@ -1513,15 +1514,15 @@ export function MeetingWorkspace({
               ) : null}
 
               <div className="space-y-3">
-                {documents.length === 0 ? <p className="text-sm text-muted-foreground">No documents uploaded yet.</p> : null}
+                {documents.length === 0 ? <p className="text-sm text-slate-300">No documents uploaded yet.</p> : null}
                 {documents.map((document) => {
                   const docPages = pages.filter((page) => page.document_id === document.id).sort((a, b) => a.page_number - b.page_number);
                   const firstPage = docPages[0];
                   const Icon = document.document_type === "image" ? ImageIcon : document.document_type === "pdf" ? FileUp : Presentation;
                   return (
-                    <div key={document.id} className="rounded-3xl border border-border/70 bg-white/75 p-4">
+                    <div key={document.id} className="rounded-3xl border border-white/10 bg-white/[0.07] p-4">
                       <div className="flex items-start gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-secondary text-primary">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-emerald-200">
                           <Icon className="h-5 w-5" aria-hidden="true" />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -1530,11 +1531,11 @@ export function MeetingWorkspace({
                             <Badge variant="secondary">{document.document_type}</Badge>
                             <Badge variant={document.conversion_status === "ready" ? "success" : "outline"}>{document.conversion_status}</Badge>
                           </div>
-                          {document.conversion_error ? <p className="mt-2 text-xs text-destructive">{document.conversion_error}</p> : null}
+                          {document.conversion_error ? <p className="mt-2 text-xs text-rose-200">{document.conversion_error}</p> : null}
                         </div>
                       </div>
                       {firstPage ? (
-                        <Button className="mt-3 w-full" disabled={!canUsePresenterControls} onClick={() => selectDocumentPage(document, firstPage)} size="sm" variant={selectedDocumentId === document.id ? "default" : "outline"}>
+                        <Button className={cn("mt-3 w-full", selectedDocumentId === document.id ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950")} disabled={!canUsePresenterControls} onClick={() => selectDocumentPage(document, firstPage)} size="sm" variant={selectedDocumentId === document.id ? "default" : "outline"}>
                           {selectedDocumentId === document.id ? "Selected" : "Broadcast document"}
                         </Button>
                       ) : null}
@@ -1545,23 +1546,23 @@ export function MeetingWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="bg-white/85 backdrop-blur">
+          <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <UsersRound className="h-5 w-5" aria-hidden="true" />
                 Presence
               </CardTitle>
-              <CardDescription>{presenceUsers.length} online in this meeting room.</CardDescription>
+              <CardDescription className="text-slate-300">{presenceUsers.length} online in this meeting room.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {presenceUsers.length === 0 ? <p className="text-sm text-muted-foreground">Presence is connecting...</p> : null}
+              {presenceUsers.length === 0 ? <p className="text-sm text-slate-300">Presence is connecting...</p> : null}
               {presenceUsers.map((user) => (
-                <div key={`${user.userId}-${user.onlineAt}`} className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-white/70 p-3">
+                <div key={`${user.userId}-${user.onlineAt}`} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.07] p-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: user.color ?? "#0f4c5c" }} />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold">{user.name}</p>
-                      <p className="text-xs text-muted-foreground">{user.role}</p>
+                      <p className="text-xs text-slate-300">{user.role}</p>
                     </div>
                   </div>
                   <Badge variant="success">online</Badge>
