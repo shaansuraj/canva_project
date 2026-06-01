@@ -34,7 +34,7 @@
   }
 
   body {
-    @apply min-h-screen bg-background text-foreground antialiased;
+    @apply min-h-screen overflow-x-hidden bg-background text-foreground antialiased;
     font-family: "Plus Jakarta Sans", "Aptos", "Segoe UI", sans-serif;
     background:
       radial-gradient(circle at top left, rgba(244, 162, 97, 0.22), transparent 30rem),
@@ -46,5 +46,9 @@
 @layer utilities {
   .safe-bottom {
     padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .safe-top {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
   }
 }
