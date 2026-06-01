@@ -46,7 +46,6 @@ import { cn } from "@/lib/utils/cn";
 import { getDocumentType, PPTX_FALLBACK_ERROR, sanitizeFilename } from "@/lib/validation/documents";
 import type { AnnotationTool } from "@/lib/validation/annotations";
 import type { Annotation, DocumentPage, Meeting, MeetingDocument, MeetingParticipant, ParticipantPermission, Profile, ScreenShareSession } from "@/types/app";
-import type { Json } from "@/types/database";
 
 const AnnotationCanvas = dynamic<AnnotationCanvasProps>(() => import("./annotation-canvas").then((module) => module.AnnotationCanvas), {
   ssr: false,
@@ -101,6 +100,13 @@ type WorkspaceExportResult = {
   status: "completed" | "failed";
   signedUrl?: string | null;
   storagePath?: string;
+  error?: string;
+};
+
+type WorkspaceAnnotationsResult = {
+  annotation?: Annotation;
+  annotations?: Annotation[];
+  clearCount?: number;
   error?: string;
 };
 
@@ -245,14 +251,16 @@ export function MeetingWorkspace({
   }, [meeting.id, supabase]);
 
   const refetchAnnotations = useCallback(async () => {
-    const { data } = await supabase
-      .from("annotations")
-      .select("*")
-      .eq("meeting_id", meeting.id)
-      .eq("is_deleted", false)
-      .order("created_at", { ascending: true });
+    const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
+      body: { action: "list", meetingId: meeting.id }
+    });
 
-    setAnnotations((data ?? []) as Annotation[]);
+    if (error || data?.error) {
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotations could not be loaded." });
+      return;
+    }
+
+    setAnnotations(data?.annotations ?? []);
   }, [meeting.id, supabase]);
 
   const refetchPermissions = useCallback(async () => {
@@ -276,6 +284,11 @@ export function MeetingWorkspace({
 
     setScreenShareSession(((data ?? [])[0] ?? null) as ScreenShareSession | null);
   }, [meeting.id, supabase]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refetchAnnotations(), 0);
+    return () => window.clearTimeout(timer);
+  }, [refetchAnnotations]);
 
   useEffect(() => {
     let active = true;
@@ -699,54 +712,38 @@ export function MeetingWorkspace({
     if (!selectedDocument || !selectedPage) return;
     setMessage(null);
 
-    const { data: annotation, error } = await supabase.rpc("create_annotation_with_event", {
-      p_meeting_id: meeting.id,
-      p_document_id: selectedDocument.id,
-      p_page_id: selectedPage.id,
-      p_annotation_type: type,
-      p_color: annotationColor,
-      p_payload: payload as Json
+    const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
+      body: {
+        action: "create",
+        meetingId: meeting.id,
+        documentId: selectedDocument.id,
+        pageId: selectedPage.id,
+        annotationType: type,
+        color: annotationColor,
+        payload
+      }
     });
+    const annotation = data?.annotation;
 
     if (error || !annotation) {
-      setMessage({ type: "error", text: error?.message ?? "Annotation could not be saved." });
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotation could not be saved." });
       return;
     }
 
-    setAnnotations((current) => [...current, annotation as Annotation]);
+    setAnnotations((current) => [...current, annotation]);
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationCreated, { annotationId: annotation.id, pageId: selectedPage.id });
   }
 
   async function deleteAnnotation(annotation: Annotation) {
-    const { data: updated, error } = await supabase
-      .from("annotations")
-      .update({ is_deleted: true, version: annotation.version + 1 })
-      .eq("id", annotation.id)
-      .select("*")
-      .single();
+    const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
+      body: { action: "delete", annotationId: annotation.id }
+    });
+    const updated = data?.annotation;
 
     if (error || !updated) {
-      setMessage({ type: "error", text: error?.message ?? "Annotation could not be deleted." });
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotation could not be deleted." });
       return;
     }
-
-    await supabase.from("annotation_events").insert({
-      annotation_id: annotation.id,
-      meeting_id: annotation.meeting_id,
-      document_id: annotation.document_id,
-      page_id: annotation.page_id,
-      user_id: profile.id,
-      event_type: "deleted",
-      before_payload: annotation.payload as Json,
-      after_payload: updated.payload as Json,
-      metadata: {
-        userName: profile.full_name,
-        designation: profile.designation,
-        role: profile.role,
-        annotationType: annotation.annotation_type,
-        color: annotation.color
-      }
-    });
 
     setAnnotations((current) => current.filter((item) => item.id !== annotation.id));
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationDeleted, { annotationId: annotation.id, pageId: annotation.page_id });
@@ -760,38 +757,22 @@ export function MeetingWorkspace({
 
     const nextColor = patch.color ?? annotation.color;
     const nextPayload = patch.payload ?? annotation.payload;
-    const { data: updated, error } = await supabase
-      .from("annotations")
-      .update({ color: nextColor, payload: nextPayload as Json, version: annotation.version + 1 })
-      .eq("id", annotation.id)
-      .select("*")
-      .single();
+    const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
+      body: {
+        action: "update",
+        annotationId: annotation.id,
+        color: nextColor,
+        payload: nextPayload
+      }
+    });
+    const updated = data?.annotation;
 
     if (error || !updated) {
-      setMessage({ type: "error", text: error?.message ?? "Annotation could not be updated." });
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotation could not be updated." });
       return;
     }
 
-    await supabase.from("annotation_events").insert({
-      annotation_id: annotation.id,
-      meeting_id: annotation.meeting_id,
-      document_id: annotation.document_id,
-      page_id: annotation.page_id,
-      user_id: profile.id,
-      event_type: "updated",
-      before_payload: annotation.payload as Json,
-      after_payload: updated.payload as Json,
-      metadata: {
-        editedBy: profile.full_name,
-        editedRole: profile.role,
-        originalUserName: annotation.user_name_snapshot,
-        annotationType: annotation.annotation_type,
-        previousColor: annotation.color,
-        nextColor
-      }
-    });
-
-    setAnnotations((current) => current.map((item) => (item.id === annotation.id ? (updated as Annotation) : item)));
+    setAnnotations((current) => current.map((item) => (item.id === annotation.id ? updated : item)));
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationUpdated, { annotationId: annotation.id, pageId: annotation.page_id });
     setMessage({ type: "success", text: "Annotation updated for everyone." });
   }
@@ -847,32 +828,19 @@ export function MeetingWorkspace({
       return;
     }
 
-    const { error } = await supabase
-      .from("annotations")
-      .update({ is_deleted: true })
-      .eq("meeting_id", meeting.id)
-      .eq("page_id", selectedPage.id)
-      .eq("is_deleted", false);
-
-    if (error) {
-      setMessage({ type: "error", text: error.message });
-      return;
-    }
-
-    await supabase.from("annotation_events").insert({
-      annotation_id: null,
-      meeting_id: meeting.id,
-      document_id: selectedDocument.id,
-      page_id: selectedPage.id,
-      user_id: profile.id,
-      event_type: "cleared",
-      metadata: {
-        clearCount,
-        userName: profile.full_name,
-        designation: profile.designation,
-        role: profile.role
+    const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
+      body: {
+        action: "clear",
+        meetingId: meeting.id,
+        documentId: selectedDocument.id,
+        pageId: selectedPage.id
       }
     });
+
+    if (error || data?.error) {
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotations could not be cleared." });
+      return;
+    }
 
     setAnnotations((current) => current.filter((annotation) => annotation.page_id !== selectedPage.id));
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationsCleared, { pageId: selectedPage.id, clearCount });

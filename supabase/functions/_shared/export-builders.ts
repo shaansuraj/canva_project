@@ -28,6 +28,8 @@ export type DocumentRow = {
   id: string;
   title: string;
   document_type: string;
+  storage_path?: string | null;
+  mime_type?: string | null;
 };
 
 export type PageRow = {
@@ -201,33 +203,79 @@ function linePointsPayload(payload: Record<string, unknown>) {
   return values.every((value) => typeof value === "number") ? (values as [number, number, number, number]) : null;
 }
 
+function isPngDocument(document: DocumentRow) {
+  return document.mime_type === "image/png" || document.storage_path?.toLowerCase().endsWith(".png");
+}
+
+function isJpegDocument(document: DocumentRow) {
+  const path = document.storage_path?.toLowerCase() ?? "";
+  return document.mime_type === "image/jpeg" || document.mime_type === "image/jpg" || path.endsWith(".jpg") || path.endsWith(".jpeg");
+}
+
 export async function createAnnotatedPdf({
   meeting,
   documents,
   pages,
-  annotations
+  annotations,
+  sourceFiles = {}
 }: {
   meeting: MeetingRow;
   documents: DocumentRow[];
   pages: PageRow[];
   annotations: AnnotationRow[];
+  sourceFiles?: Record<string, Uint8Array>;
 }) {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const docs = new Map(documents.map((document) => [document.id, document]));
+  const sourcePdfCache = new Map<string, PDFDocument>();
   const activeAnnotations = annotations.filter((annotation) => !annotation.is_deleted);
   const pagesToRender = pages.length > 0 ? pages : [{ id: "summary", document_id: "", page_number: 1, width: 900, height: 650 }];
 
   for (const pageRow of pagesToRender) {
-    const width = Math.max(360, Number(pageRow.width ?? 900));
-    const height = Math.max(360, Number(pageRow.height ?? 650));
-    const page = pdf.addPage([width, height]);
-    const documentTitle = docs.get(pageRow.document_id)?.title ?? "Meeting annotations";
+    const document = docs.get(pageRow.document_id);
+    const sourceBytes = document ? sourceFiles[document.id] : undefined;
+    let width = Math.max(360, Number(pageRow.width ?? 900));
+    let height = Math.max(360, Number(pageRow.height ?? 650));
+    let page;
+    let hasSourceBackground = false;
 
-    page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
-    page.drawText(meeting.title, { x: 24, y: height - 32, size: 16, font: bold, color: rgb(0.06, 0.3, 0.36) });
-    page.drawText(`${documentTitle} - page ${pageRow.page_number}`, { x: 24, y: height - 54, size: 10, font, color: rgb(0.25, 0.28, 0.32) });
+    if (document?.document_type === "pdf" && sourceBytes) {
+      let sourcePdf = sourcePdfCache.get(document.id);
+      if (!sourcePdf) {
+        sourcePdf = await PDFDocument.load(sourceBytes, { ignoreEncryption: true });
+        sourcePdfCache.set(document.id, sourcePdf);
+      }
+
+      const sourceIndex = Math.max(0, Math.min(sourcePdf.getPageCount() - 1, pageRow.page_number - 1));
+      const [copiedPage] = await pdf.copyPages(sourcePdf, [sourceIndex]);
+      page = pdf.addPage(copiedPage);
+      const size = page.getSize();
+      width = size.width;
+      height = size.height;
+      hasSourceBackground = true;
+    } else {
+      page = pdf.addPage([width, height]);
+      page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
+
+      if (document?.document_type === "image" && sourceBytes && isPngDocument(document)) {
+        const image = await pdf.embedPng(sourceBytes);
+        page.drawImage(image, { x: 0, y: 0, width, height });
+        hasSourceBackground = true;
+      } else if (document?.document_type === "image" && sourceBytes && isJpegDocument(document)) {
+        const image = await pdf.embedJpg(sourceBytes);
+        page.drawImage(image, { x: 0, y: 0, width, height });
+        hasSourceBackground = true;
+      }
+    }
+
+    const documentTitle = document?.title ?? "Meeting annotations";
+
+    if (!hasSourceBackground) {
+      page.drawText(meeting.title, { x: 24, y: height - 32, size: 16, font: bold, color: rgb(0.06, 0.3, 0.36) });
+      page.drawText(`${documentTitle} - page ${pageRow.page_number}`, { x: 24, y: height - 54, size: 10, font, color: rgb(0.25, 0.28, 0.32) });
+    }
 
     const pageAnnotations = activeAnnotations.filter((annotation) => annotation.page_id === pageRow.id);
     for (const annotation of pageAnnotations) {

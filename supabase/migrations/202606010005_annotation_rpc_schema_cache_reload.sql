@@ -1,61 +1,6 @@
--- Phase 4/5 stabilization: durable annotation writes and lifecycle-friendly RLS.
--- This migration fixes ambiguous helper argument names, validates document/page ownership,
--- and exposes a trusted RPC that writes annotations plus audit events transactionally.
-
-create or replace function public.can_user_annotate(meeting_id uuid, user_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.meetings m
-    join public.profiles p on p.id = $2
-    left join public.participant_permissions pp
-      on pp.meeting_id = m.id and pp.user_id = $2
-    where m.id = $1
-      and $2 = auth.uid()
-      and p.is_active = true
-      and m.document_locked = false
-      and (
-        (m.presenter_id = $2 and p.role = 'presenter')
-        or (
-          p.role = 'participant'
-          and m.status = 'live'
-          and m.participant_annotation_enabled = true
-          and exists (
-            select 1
-            from public.meeting_participants mp
-            where mp.meeting_id = m.id
-              and mp.user_id = $2
-              and mp.is_present = true
-          )
-          and coalesce(pp.can_annotate, true) = true
-          and coalesce(pp.is_muted_from_annotation, false) = false
-        )
-      )
-  )
-$$;
-
-create or replace function public.document_page_belongs_to_meeting(p_meeting_id uuid, p_document_id uuid, p_page_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.meeting_documents d
-    join public.document_pages p on p.document_id = d.id
-    where d.id = p_document_id
-      and p.id = p_page_id
-      and d.meeting_id = p_meeting_id
-      and p.meeting_id = p_meeting_id
-  )
-$$;
+-- Compatibility safety net for older deployed bundles that still call the
+-- create_annotation_with_event RPC directly. Also asks PostgREST to reload its
+-- schema cache so newly-created functions are visible immediately.
 
 create or replace function public.create_annotation_with_event(
   p_meeting_id uuid,
@@ -152,11 +97,4 @@ $$;
 revoke all on function public.create_annotation_with_event(uuid, uuid, uuid, public.annotation_type, text, jsonb) from public;
 grant execute on function public.create_annotation_with_event(uuid, uuid, uuid, public.annotation_type, text, jsonb) to authenticated;
 
-DROP POLICY IF EXISTS annotations_insert_allowed ON public.annotations;
-CREATE POLICY annotations_insert_allowed ON public.annotations
-  FOR INSERT WITH CHECK (
-    user_id = auth.uid()
-    AND public.can_user_annotate(meeting_id, user_id)
-    AND role_snapshot = public.auth_user_role()
-    AND public.document_page_belongs_to_meeting(meeting_id, document_id, page_id)
-  );
+notify pgrst, 'reload schema';

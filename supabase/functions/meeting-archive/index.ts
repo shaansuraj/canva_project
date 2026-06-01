@@ -22,6 +22,19 @@ const schema = z.object({
   meetingId: z.string().uuid()
 });
 
+async function loadSourceFiles(serviceClient: ReturnType<typeof createServiceClient>, documents: DocumentRow[]) {
+  const sourceFiles: Record<string, Uint8Array> = {};
+
+  for (const document of documents) {
+    if (!document.storage_path || (document.document_type !== "pdf" && document.document_type !== "image")) continue;
+    const { data, error } = await serviceClient.storage.from("meeting-documents").download(document.storage_path);
+    if (error || !data) continue;
+    sourceFiles[document.id] = new Uint8Array(await data.arrayBuffer());
+  }
+
+  return sourceFiles;
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return jsonResponse({ error: "Method not allowed." }, 405);
@@ -98,7 +111,7 @@ Deno.serve(async (request) => {
   try {
     const [{ data: participants }, { data: documents }, { data: pages }, { data: annotations }, { data: events }, { data: notes }] = await Promise.all([
       serviceClient.from("meeting_participants").select("*").eq("meeting_id", meeting.id).order("joined_at", { ascending: true }),
-      serviceClient.from("meeting_documents").select("id, title, document_type").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
+      serviceClient.from("meeting_documents").select("id, title, document_type, storage_path, mime_type").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
       serviceClient.from("document_pages").select("id, document_id, page_number, width, height").eq("meeting_id", meeting.id).order("page_number", { ascending: true }),
       serviceClient.from("annotations").select("*").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
       serviceClient.from("annotation_events").select("*").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
@@ -111,12 +124,14 @@ Deno.serve(async (request) => {
     const typedAnnotations = (annotations ?? []) as AnnotationRow[];
     const typedEvents = (events ?? []) as AnnotationEventRow[];
     const typedParticipants = (participants ?? []) as ParticipantRow[];
+    const sourceFiles = await loadSourceFiles(serviceClient, typedDocuments);
 
     const annotatedPdf = await createAnnotatedPdf({
       meeting,
       documents: typedDocuments,
       pages: typedPages,
-      annotations: typedAnnotations
+      annotations: typedAnnotations,
+      sourceFiles
     });
     const notesText = createNotesText(exportNotes as NoteRow[]);
     const annotationHistoryCsv = createAnnotationHistoryCsv(typedEvents);

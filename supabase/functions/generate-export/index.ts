@@ -45,7 +45,8 @@ async function createTextOrPdfPayload({
   pages,
   annotations,
   events,
-  notes
+  notes,
+  sourceFiles
 }: {
   exportType: (typeof exportTypes)[number];
   meeting: MeetingRow;
@@ -54,9 +55,10 @@ async function createTextOrPdfPayload({
   annotations: AnnotationRow[];
   events: AnnotationEventRow[];
   notes: NoteRow[];
+  sourceFiles?: Record<string, Uint8Array>;
 }) {
   if (exportType === "annotated_pdf") {
-    return await createAnnotatedPdf({ meeting, documents, pages, annotations });
+    return await createAnnotatedPdf({ meeting, documents, pages, annotations, sourceFiles });
   }
   if (exportType === "notes") {
     return new TextEncoder().encode(createNotesText(notes));
@@ -65,6 +67,19 @@ async function createTextOrPdfPayload({
     return new TextEncoder().encode(createAnnotationHistoryCsv(events));
   }
   return new TextEncoder().encode(createUserReportCsv(annotations));
+}
+
+async function loadSourceFiles(serviceClient: ReturnType<typeof createServiceClient>, documents: DocumentRow[]) {
+  const sourceFiles: Record<string, Uint8Array> = {};
+
+  for (const document of documents) {
+    if (!document.storage_path || (document.document_type !== "pdf" && document.document_type !== "image")) continue;
+    const { data, error } = await serviceClient.storage.from("meeting-documents").download(document.storage_path);
+    if (error || !data) continue;
+    sourceFiles[document.id] = new Uint8Array(await data.arrayBuffer());
+  }
+
+  return sourceFiles;
 }
 
 Deno.serve(async (request) => {
@@ -142,7 +157,7 @@ Deno.serve(async (request) => {
 
   try {
     const [{ data: documents }, { data: pages }, { data: annotations }, { data: events }, { data: notes }] = await Promise.all([
-      serviceClient.from("meeting_documents").select("id, title, document_type").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
+      serviceClient.from("meeting_documents").select("id, title, document_type, storage_path, mime_type").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
       serviceClient.from("document_pages").select("id, document_id, page_number, width, height").eq("meeting_id", meeting.id).order("page_number", { ascending: true }),
       serviceClient.from("annotations").select("*").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
       serviceClient.from("annotation_events").select("*").eq("meeting_id", meeting.id).order("created_at", { ascending: true }),
@@ -150,14 +165,17 @@ Deno.serve(async (request) => {
     ]);
 
     const exportNotes = isAdmin || isPresenterOwner ? (notes ?? []) : (notes ?? []).filter((note) => note.is_shared);
+    const typedDocuments = (documents ?? []) as DocumentRow[];
+    const sourceFiles = parsed.data.exportType === "annotated_pdf" ? await loadSourceFiles(serviceClient, typedDocuments) : undefined;
     const payload = await createTextOrPdfPayload({
       exportType: parsed.data.exportType,
       meeting,
-      documents: (documents ?? []) as DocumentRow[],
+      documents: typedDocuments,
       pages: (pages ?? []) as PageRow[],
       annotations: (annotations ?? []) as AnnotationRow[],
       events: (events ?? []) as AnnotationEventRow[],
-      notes: exportNotes as NoteRow[]
+      notes: exportNotes as NoteRow[],
+      sourceFiles
     });
 
     const extension = extensionFor(parsed.data.exportType);
