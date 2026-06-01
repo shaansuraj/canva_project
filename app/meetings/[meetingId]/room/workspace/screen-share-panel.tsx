@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LiveKitRoom, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
 import { ConnectionState, Room, Track } from "livekit-client";
-import { Loader2, MonitorUp, PauseCircle, Square } from "lucide-react";
+import { FileText, Loader2, Maximize2, Minimize2, MonitorUp, PauseCircle, Square } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ type PanelProps = {
   meetingId: string;
   allowPresenterControls: boolean;
   session: ScreenShareSession | null;
+  onOpenBoard: () => void;
   onStarted: () => Promise<void>;
   onPaused: () => Promise<void>;
   onStopped: () => Promise<void>;
@@ -31,10 +32,12 @@ type PanelProps = {
 function ScreenShareStage({
   allowPresenterControls,
   session,
+  minimized,
+  onOpenBoard,
   onStarted,
   onPaused,
   onStopped
-}: Omit<PanelProps, "meetingId">) {
+}: Omit<PanelProps, "meetingId"> & { minimized: boolean }) {
   const tracks = useTracks([Track.Source.ScreenShare]);
   const firstScreenTrack = tracks[0];
   const connectionState = useConnectionState();
@@ -89,7 +92,7 @@ function ScreenShareStage({
   }
 
   return (
-    <div className="space-y-4">
+    <div className={minimized ? "space-y-3" : "space-y-4"}>
       {controlError ? (
         <Alert className="border-destructive/30 bg-destructive/5 text-destructive">
           <AlertTitle>Screen share issue</AlertTitle>
@@ -97,19 +100,19 @@ function ScreenShareStage({
         </Alert>
       ) : null}
 
-      <div className="relative flex aspect-video min-h-[220px] items-center justify-center overflow-hidden rounded-3xl border border-border bg-slate-950 text-white shadow-soft">
+      <div className={minimized ? "relative flex aspect-video min-h-24 items-center justify-center overflow-hidden rounded-2xl border border-white/15 bg-slate-950 text-white shadow-soft" : "relative flex aspect-video min-h-[220px] items-center justify-center overflow-hidden rounded-3xl border border-border bg-slate-950 text-white shadow-soft"}>
         {firstScreenTrack ? (
           <VideoTrack trackRef={firstScreenTrack} muted className="h-full w-full object-contain" />
         ) : (
-          <div className="max-w-sm p-6 text-center">
-            <MonitorUp className="mx-auto mb-3 h-10 w-10 text-white/70" aria-hidden="true" />
-            <p className="font-black">Presenter screen will appear here</p>
-            <p className="mt-2 text-sm text-white/65">This room subscribes only to screen video. Microphone and camera tracks are never requested.</p>
+          <div className={minimized ? "max-w-xs p-3 text-center" : "max-w-sm p-6 text-center"}>
+            <MonitorUp className={minimized ? "mx-auto mb-2 h-6 w-6 text-white/70" : "mx-auto mb-3 h-10 w-10 text-white/70"} aria-hidden="true" />
+            <p className={minimized ? "text-xs font-black" : "font-black"}>Presenter screen will appear here</p>
+            {!minimized ? <p className="mt-2 text-sm text-white/65">This room subscribes only to screen video. Microphone and camera tracks are never requested.</p> : null}
           </div>
         )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-secondary/70 p-4 text-sm">
+      <div className={minimized ? "flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/70 p-2 text-xs" : "flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-secondary/70 p-4 text-sm"}>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={isConnected ? "success" : "secondary"}>{connectionState}</Badge>
           <Badge variant={sessionStatus === "live" ? "success" : "outline"}>screen {sessionStatus}</Badge>
@@ -130,19 +133,25 @@ function ScreenShareStage({
               Stop
             </Button>
           </div>
-        ) : null}
+        ) : (
+          <Button onClick={onOpenBoard} size="sm" variant="outline">
+            <FileText className="h-4 w-4" aria-hidden="true" />
+            Board
+          </Button>
+        )}
       </div>
     </div>
   );
 }
 
-export function ScreenSharePanel({ meetingId, allowPresenterControls, session, onStarted, onPaused, onStopped }: PanelProps) {
+export function ScreenSharePanel({ meetingId, allowPresenterControls, session, onOpenBoard, onStarted, onPaused, onStopped }: PanelProps) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const room = useMemo(() => new Room(), []);
   const liveKitUrl = getClientEnv().NEXT_PUBLIC_LIVEKIT_URL;
   const [tokenState, setTokenState] = useState<TokenResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const handleLiveKitError = useCallback((liveKitError: Error) => setError(liveKitError.message), []);
 
   useEffect(() => {
@@ -179,22 +188,30 @@ export function ScreenSharePanel({ meetingId, allowPresenterControls, session, o
   }, [liveKitUrl, meetingId, supabase]);
 
   return (
-    <Card className="bg-white/85 backdrop-blur">
-      <CardHeader>
+    <Card className={minimized ? "fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),20rem)] border-white/70 bg-white/92 shadow-[0_28px_90px_-30px_rgba(15,23,42,0.65)] backdrop-blur-xl sm:bottom-6 sm:right-6" : "fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),28rem)] border-white/70 bg-white/92 shadow-[0_28px_90px_-30px_rgba(15,23,42,0.65)] backdrop-blur-xl sm:bottom-6 sm:right-6"}>
+      <CardHeader className={minimized ? "p-3" : "p-4 sm:p-5"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className={minimized ? "flex items-center gap-2 text-base" : "flex items-center gap-2"}>
               <MonitorUp className="h-5 w-5" aria-hidden="true" />
-              Screen share
+              {minimized ? "Live screen" : "Screen share"}
             </CardTitle>
-            <CardDescription>LiveKit is used only for presenter screen video. No microphone, camera, mute, audio, or call controls are rendered.</CardDescription>
+            {!minimized ? <CardDescription>LiveKit is used only for presenter screen video. No microphone, camera, mute, audio, or call controls are rendered.</CardDescription> : null}
           </div>
-          {allowPresenterControls ? <Badge variant="success">Presenter console</Badge> : <Badge variant="secondary">Viewer only</Badge>}
+          <div className="flex items-center gap-2">
+            {allowPresenterControls ? <Badge variant="success">Presenter</Badge> : <Badge variant="secondary">Viewer</Badge>}
+            <Button aria-label={minimized ? "Expand screen share" : "Minimize screen share"} onClick={() => setMinimized((current) => !current)} size="sm" type="button" variant="outline">
+              {minimized ? <Maximize2 className="h-4 w-4" aria-hidden="true" /> : <Minimize2 className="h-4 w-4" aria-hidden="true" />}
+            </Button>
+            <Button aria-label="Open annotation board" onClick={onOpenBoard} size="sm" type="button" variant="outline">
+              <FileText className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className={minimized ? "p-3 pt-0" : "p-4 pt-0 sm:p-5 sm:pt-0"}>
         {loading ? (
-          <div className="flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-primary/20 bg-primary/5 text-sm text-muted-foreground">
+          <div className={minimized ? "flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-primary/20 bg-primary/5 text-xs text-muted-foreground" : "flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-primary/20 bg-primary/5 text-sm text-muted-foreground"}>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
             Connecting to screen share...
           </div>
@@ -214,7 +231,15 @@ export function ScreenSharePanel({ meetingId, allowPresenterControls, session, o
             screen={false}
             onError={handleLiveKitError}
           >
-            <ScreenShareStage allowPresenterControls={allowPresenterControls} session={session} onStarted={onStarted} onPaused={onPaused} onStopped={onStopped} />
+            <ScreenShareStage
+              allowPresenterControls={allowPresenterControls}
+              minimized={minimized}
+              onOpenBoard={onOpenBoard}
+              session={session}
+              onStarted={onStarted}
+              onPaused={onPaused}
+              onStopped={onStopped}
+            />
           </LiveKitRoom>
         )}
       </CardContent>

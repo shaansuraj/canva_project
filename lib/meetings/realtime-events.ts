@@ -3,6 +3,7 @@
   documentUploaded: "document.uploaded",
   documentSelected: "document.selected",
   pageChanged: "page.changed",
+  boardViewportChanged: "board.viewport.changed",
   annotationCreated: "annotation.created",
   annotationUpdated: "annotation.updated",
   annotationDeleted: "annotation.deleted",

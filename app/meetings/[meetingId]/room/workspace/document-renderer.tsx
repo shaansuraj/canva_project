@@ -57,7 +57,7 @@ export function DocumentRenderer({
   }, [height, onSizeChange, sourceHeight, sourceWidth, width]);
 
   return (
-    <div ref={containerRef} className="w-full overflow-x-auto">
+    <div ref={containerRef} className="w-full">
       <div className="relative mx-auto overflow-hidden rounded-3xl border border-border bg-white shadow-soft" style={{ width, minHeight: height }}>
         {!signedUrl ? (
           <div className="flex h-full min-h-[320px] items-center justify-center p-8 text-center text-sm text-muted-foreground">

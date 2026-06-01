@@ -1,9 +1,10 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { FileUp, Highlighter, Image as ImageIcon, Loader2, Lock, LockOpen, MousePointer2, PenLine, PlayCircle, Presentation, RectangleHorizontal, Trash2, Type, UsersRound } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { startMeetingWorkspaceAction } from "../actions";
 import type { AnnotationCanvasProps } from "./annotation-canvas";
@@ -63,6 +64,27 @@ function isRenderableDocument(document: MeetingDocument | null) {
   return document?.document_type === "pdf" || document?.document_type === "image";
 }
 
+type BoardViewportPayload = {
+  documentId: string | null;
+  pageId: string | null;
+  topRatio: number;
+  leftRatio: number;
+  sourceUserId: string;
+};
+
+function getScrollRatio({ value, max }: { value: number; max: number }) {
+  if (max <= 0) return 0;
+  return Math.max(0, Math.min(1, value / max));
+}
+
+function applyScrollRatio(container: HTMLDivElement, topRatio: number, leftRatio: number) {
+  container.scrollTo({
+    top: topRatio * Math.max(0, container.scrollHeight - container.clientHeight),
+    left: leftRatio * Math.max(0, container.scrollWidth - container.clientWidth),
+    behavior: "smooth"
+  });
+}
+
 export function MeetingWorkspace({
   initialMeeting,
   profile,
@@ -86,6 +108,11 @@ export function MeetingWorkspace({
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const boardSectionRef = useRef<HTMLDivElement>(null);
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+  const meetingChannelRef = useRef<RealtimeChannel | null>(null);
+  const suppressScrollBroadcastRef = useRef(false);
+  const lastScrollBroadcastRef = useRef(0);
   const [meeting, setMeeting] = useState(initialMeeting);
   const [documents, setDocuments] = useState(initialDocuments);
   const [pages, setPages] = useState(initialPages);
@@ -114,6 +141,34 @@ export function MeetingWorkspace({
   const participantControlRows = initialParticipants.filter((participant) => participant.role_snapshot === "participant");
 
   const onSizeChange = useCallback((size: BoardSize) => setBoard(size), []);
+
+  const scrollToBoard = useCallback(() => {
+    boardSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const sendMeetingBroadcast = useCallback(
+    async (event: string, payload: Record<string, unknown>) => {
+      const channel = meetingChannelRef.current ?? supabase.channel(`meeting:${meeting.id}`);
+      await channel.send({ type: "broadcast", event, payload });
+    },
+    [meeting.id, supabase]
+  );
+
+  const applyRemoteBoardViewport = useCallback((payload: BoardViewportPayload) => {
+    if (payload.sourceUserId === profile.id) return;
+    if (payload.documentId) setSelectedDocumentId(payload.documentId);
+    if (payload.pageId) setSelectedPageId(payload.pageId);
+
+    suppressScrollBroadcastRef.current = true;
+    window.setTimeout(() => {
+      const container = boardScrollRef.current;
+      if (container) applyScrollRatio(container, payload.topRatio, payload.leftRatio);
+      scrollToBoard();
+      window.setTimeout(() => {
+        suppressScrollBroadcastRef.current = false;
+      }, 350);
+    }, 80);
+  }, [profile.id, scrollToBoard]);
 
   const refetchDocuments = useCallback(async () => {
     const [{ data: docs }, { data: pageRows }] = await Promise.all([
@@ -183,17 +238,38 @@ export function MeetingWorkspace({
 
   useEffect(() => {
     const channel = supabase.channel(`meeting:${meeting.id}`);
+    meetingChannelRef.current = channel;
 
     channel
-      .on("broadcast", { event: REALTIME_EVENTS.documentUploaded }, () => void refetchDocuments())
+      .on("broadcast", { event: REALTIME_EVENTS.documentUploaded }, ({ payload }) => {
+        void refetchDocuments();
+        const nextDocumentId = typeof payload?.documentId === "string" ? payload.documentId : null;
+        const nextPageId = typeof payload?.pageId === "string" ? payload.pageId : null;
+        if (nextDocumentId) setSelectedDocumentId(nextDocumentId);
+        if (nextPageId) setSelectedPageId(nextPageId);
+        if (!canUsePresenterControls) scrollToBoard();
+      })
       .on("broadcast", { event: REALTIME_EVENTS.documentSelected }, ({ payload }) => {
         const nextDocumentId = typeof payload?.documentId === "string" ? payload.documentId : null;
         const nextPageId = typeof payload?.pageId === "string" ? payload.pageId : null;
         if (nextDocumentId) setSelectedDocumentId(nextDocumentId);
         if (nextPageId) setSelectedPageId(nextPageId);
+        if (!canUsePresenterControls) scrollToBoard();
       })
       .on("broadcast", { event: REALTIME_EVENTS.pageChanged }, ({ payload }) => {
         if (typeof payload?.pageId === "string") setSelectedPageId(payload.pageId);
+        if (!canUsePresenterControls) scrollToBoard();
+      })
+      .on("broadcast", { event: REALTIME_EVENTS.boardViewportChanged }, ({ payload }) => {
+        if (
+          (payload?.documentId === null || typeof payload?.documentId === "string") &&
+          (payload?.pageId === null || typeof payload?.pageId === "string") &&
+          typeof payload?.topRatio === "number" &&
+          typeof payload?.leftRatio === "number" &&
+          typeof payload?.sourceUserId === "string"
+        ) {
+          applyRemoteBoardViewport(payload as BoardViewportPayload);
+        }
       })
       .on("broadcast", { event: REALTIME_EVENTS.meetingStatusChanged }, ({ payload }) => {
         if (payload?.status === "live" || payload?.status === "scheduled" || payload?.status === "paused") {
@@ -217,9 +293,10 @@ export function MeetingWorkspace({
       .subscribe();
 
     return () => {
+      meetingChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [meeting.id, refetchDocuments, refetchPermissions, refetchScreenShareSession, supabase]);
+  }, [applyRemoteBoardViewport, canUsePresenterControls, meeting.id, refetchDocuments, refetchPermissions, refetchScreenShareSession, scrollToBoard, supabase]);
 
   useEffect(() => {
     if (!selectedPageId) return;
@@ -354,11 +431,7 @@ export function MeetingWorkspace({
         await selectDocumentPage(documentRow as MeetingDocument, firstPage, { silent: true });
       }
 
-      await supabase.channel(`meeting:${meeting.id}`).send({
-        type: "broadcast",
-        event: REALTIME_EVENTS.documentUploaded,
-        payload: { documentId, pageId: firstPage?.id ?? null }
-      });
+      await sendMeetingBroadcast(REALTIME_EVENTS.documentUploaded, { documentId, pageId: firstPage?.id ?? null });
 
       setMessage({
         type: documentType === "ppt" || documentType === "pptx" ? "info" : "success",
@@ -393,12 +466,17 @@ export function MeetingWorkspace({
     }
 
     if (!options?.silent) {
-      await supabase.channel(`meeting:${meeting.id}`).send({
-        type: "broadcast",
-        event: REALTIME_EVENTS.documentSelected,
-        payload: { documentId: document.id, pageId: page.id }
-      });
+      await sendMeetingBroadcast(REALTIME_EVENTS.documentSelected, { documentId: document.id, pageId: page.id });
     }
+
+    scrollToBoard();
+    await sendMeetingBroadcast(REALTIME_EVENTS.boardViewportChanged, {
+      documentId: document.id,
+      pageId: page.id,
+      topRatio: 0,
+      leftRatio: 0,
+      sourceUserId: profile.id
+    });
   }
 
   async function changePage(nextPage: DocumentPage) {
@@ -411,10 +489,14 @@ export function MeetingWorkspace({
       return;
     }
 
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.pageChanged,
-      payload: { pageId: nextPage.id }
+    await sendMeetingBroadcast(REALTIME_EVENTS.pageChanged, { pageId: nextPage.id });
+    scrollToBoard();
+    await sendMeetingBroadcast(REALTIME_EVENTS.boardViewportChanged, {
+      documentId: selectedDocument.id,
+      pageId: nextPage.id,
+      topRatio: 0,
+      leftRatio: 0,
+      sourceUserId: profile.id
     });
   }
 
@@ -508,6 +590,54 @@ export function MeetingWorkspace({
     });
   }
 
+  async function updateAnnotation(
+    annotation: Annotation,
+    patch: Partial<Pick<Annotation, "color" | "payload">>
+  ) {
+    if (!canUsePresenterControls) return;
+
+    const nextColor = patch.color ?? annotation.color;
+    const nextPayload = patch.payload ?? annotation.payload;
+    const { data: updated, error } = await supabase
+      .from("annotations")
+      .update({ color: nextColor, payload: nextPayload as Json, version: annotation.version + 1 })
+      .eq("id", annotation.id)
+      .select("*")
+      .single();
+
+    if (error || !updated) {
+      setMessage({ type: "error", text: error?.message ?? "Annotation could not be updated." });
+      return;
+    }
+
+    await supabase.from("annotation_events").insert({
+      annotation_id: annotation.id,
+      meeting_id: annotation.meeting_id,
+      document_id: annotation.document_id,
+      page_id: annotation.page_id,
+      user_id: profile.id,
+      event_type: "updated",
+      before_payload: annotation.payload as Json,
+      after_payload: updated.payload as Json,
+      metadata: {
+        editedBy: profile.full_name,
+        editedRole: profile.role,
+        originalUserName: annotation.user_name_snapshot,
+        annotationType: annotation.annotation_type,
+        previousColor: annotation.color,
+        nextColor
+      }
+    });
+
+    setAnnotations((current) => current.map((item) => (item.id === annotation.id ? (updated as Annotation) : item)));
+    await supabase.channel(`meeting:${meeting.id}:page:${annotation.page_id}`).send({
+      type: "broadcast",
+      event: REALTIME_EVENTS.annotationUpdated,
+      payload: { annotationId: annotation.id }
+    });
+    setMessage({ type: "success", text: "Annotation updated for everyone." });
+  }
+
   function startWorkspace() {
     if (!canUsePresenterControls) return;
     startTransition(async () => {
@@ -519,11 +649,7 @@ export function MeetingWorkspace({
 
       setMeeting((current) => ({ ...current, status: "live", started_at: current.started_at ?? new Date().toISOString() }));
       setMessage({ type: "success", text: result.message });
-      await supabase.channel(`meeting:${meeting.id}`).send({
-        type: "broadcast",
-        event: REALTIME_EVENTS.meetingStatusChanged,
-        payload: { status: "live" }
-      });
+      await sendMeetingBroadcast(REALTIME_EVENTS.meetingStatusChanged, { status: "live" });
     });
   }
 
@@ -537,11 +663,7 @@ export function MeetingWorkspace({
     }
 
     setMeeting((current) => ({ ...current, participant_annotation_enabled: enabled }));
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.permissionsChanged,
-      payload: { participantAnnotationEnabled: enabled }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.permissionsChanged, { participantAnnotationEnabled: enabled });
   }
 
   async function setDocumentLocked(locked: boolean) {
@@ -554,16 +676,8 @@ export function MeetingWorkspace({
     }
 
     setMeeting((current) => ({ ...current, document_locked: locked }));
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: locked ? REALTIME_EVENTS.documentLocked : REALTIME_EVENTS.documentUnlocked,
-      payload: { documentLocked: locked }
-    });
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.permissionsChanged,
-      payload: { documentLocked: locked }
-    });
+    await sendMeetingBroadcast(locked ? REALTIME_EVENTS.documentLocked : REALTIME_EVENTS.documentUnlocked, { documentLocked: locked });
+    await sendMeetingBroadcast(REALTIME_EVENTS.permissionsChanged, { documentLocked: locked });
   }
 
   async function clearCurrentPageAnnotations() {
@@ -640,11 +754,7 @@ export function MeetingWorkspace({
       const withoutExisting = current.filter((permission) => permission.user_id !== participant.user_id);
       return [...withoutExisting, data as ParticipantPermission];
     });
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.permissionsChanged,
-      payload: { userId: participant.user_id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.permissionsChanged, { userId: participant.user_id });
   }
 
   async function markScreenShareStarted() {
@@ -675,11 +785,7 @@ export function MeetingWorkspace({
     }
 
     setScreenShareSession(data as ScreenShareSession);
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.screenStarted,
-      payload: { sessionId: data.id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.screenStarted, { sessionId: data.id });
   }
 
   async function markScreenSharePaused() {
@@ -699,11 +805,7 @@ export function MeetingWorkspace({
     }
 
     setScreenShareSession(data as ScreenShareSession);
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.screenPaused,
-      payload: { sessionId: data.id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.screenPaused, { sessionId: data.id });
   }
 
   async function markScreenShareStopped() {
@@ -721,10 +823,26 @@ export function MeetingWorkspace({
 
     const stoppedSessionId = screenShareSession.id;
     setScreenShareSession(null);
-    await supabase.channel(`meeting:${meeting.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.screenStopped,
-      payload: { sessionId: stoppedSessionId }
+    await sendMeetingBroadcast(REALTIME_EVENTS.screenStopped, { sessionId: stoppedSessionId });
+  }
+
+  function broadcastBoardViewport() {
+    const container = boardScrollRef.current;
+    if (!container || !canUsePresenterControls || suppressScrollBroadcastRef.current) return;
+
+    const now = Date.now();
+    if (now - lastScrollBroadcastRef.current < 260) return;
+    lastScrollBroadcastRef.current = now;
+
+    const topRatio = getScrollRatio({ value: container.scrollTop, max: container.scrollHeight - container.clientHeight });
+    const leftRatio = getScrollRatio({ value: container.scrollLeft, max: container.scrollWidth - container.clientWidth });
+
+    void sendMeetingBroadcast(REALTIME_EVENTS.boardViewportChanged, {
+      documentId: selectedDocumentId,
+      pageId: selectedPageId,
+      topRatio,
+      leftRatio,
+      sourceUserId: profile.id
     });
   }
 
@@ -743,6 +861,7 @@ export function MeetingWorkspace({
         <ScreenSharePanel
           allowPresenterControls={canUsePresenterControls}
           meetingId={meeting.id}
+          onOpenBoard={scrollToBoard}
           session={screenShareSession}
           onStarted={markScreenShareStarted}
           onPaused={markScreenSharePaused}
@@ -750,8 +869,8 @@ export function MeetingWorkspace({
         />
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <Card className="bg-white/85 backdrop-blur">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+        <Card ref={boardSectionRef} id="annotation-board" className="scroll-mt-4 bg-white/85 backdrop-blur">
           <CardHeader>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -773,7 +892,7 @@ export function MeetingWorkspace({
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col gap-3 rounded-3xl border border-border/70 bg-white/75 p-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap gap-2">
+              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
                 {tools.map((item) => (
                   <Button
                     key={item.id}
@@ -781,7 +900,7 @@ export function MeetingWorkspace({
                     size="sm"
                     type="button"
                     variant={tool === item.id ? "default" : "outline"}
-                    className="min-h-11"
+                    className="min-h-12 shrink-0 rounded-2xl px-3"
                   >
                     <item.icon className="h-4 w-4" aria-hidden="true" />
                     {item.label}
@@ -803,17 +922,23 @@ export function MeetingWorkspace({
                 </div>
               </div>
             ) : (
-              <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange}>
-                <AnnotationCanvas
-                  annotations={pageAnnotations}
-                  board={board}
-                  tool={tool}
-                  color={color}
-                  canAnnotate={canAnnotate}
-                  onCreate={createAnnotation}
-                  onDelete={deleteAnnotation}
-                />
-              </DocumentRenderer>
+              <div
+                ref={boardScrollRef}
+                onScroll={broadcastBoardViewport}
+                className="max-h-[calc(100svh-11rem)] overflow-auto rounded-3xl border border-border/60 bg-white/40 p-2 shadow-inner overscroll-contain sm:max-h-[calc(100svh-14rem)]"
+              >
+                <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange}>
+                  <AnnotationCanvas
+                    annotations={pageAnnotations}
+                    board={board}
+                    tool={tool}
+                    color={color}
+                    canAnnotate={canAnnotate}
+                    onCreate={createAnnotation}
+                    onDelete={deleteAnnotation}
+                  />
+                </DocumentRenderer>
+              </div>
             )}
 
             <div className="flex flex-col gap-3 rounded-3xl bg-secondary/60 p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
@@ -837,7 +962,7 @@ export function MeetingWorkspace({
           </CardContent>
         </Card>
 
-        <aside className="space-y-5">
+        <aside className="space-y-5 lg:sticky lg:top-4 lg:self-start">
           {canUsePresenterControls ? (
             <Card className="bg-white/85 backdrop-blur">
               <CardHeader>
@@ -857,6 +982,57 @@ export function MeetingWorkspace({
                     <Trash2 className="h-4 w-4" aria-hidden="true" />
                     Clear current page
                   </Button>
+                </div>
+
+                <div className="rounded-3xl bg-secondary/60 p-4 text-sm">
+                  <p className="font-bold">Current page annotations</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Presenter can recolor, edit text annotations, or remove any annotation on the selected page.</p>
+                  <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+                    {pageAnnotations.length === 0 ? <p className="text-xs text-muted-foreground">No annotations on this page yet.</p> : null}
+                    {pageAnnotations.map((annotation) => (
+                      <div key={annotation.id} className="rounded-2xl border border-border/70 bg-white/80 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold">{annotation.user_name_snapshot}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {annotation.annotation_type} · {annotation.role_snapshot}
+                            </p>
+                          </div>
+                          <span className="h-5 w-5 shrink-0 rounded-full border border-border" style={{ backgroundColor: annotation.color }} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <Button onClick={() => updateAnnotation(annotation, { color })} size="sm" type="button" variant="outline">
+                            Use active color
+                          </Button>
+                          {annotation.annotation_type === "text" ? (
+                            <Button
+                              onClick={() => {
+                                const nextText = window.prompt("Edit annotation text", String(annotation.payload.text ?? ""));
+                                if (nextText?.trim()) {
+                                  void updateAnnotation(annotation, {
+                                    payload: { ...annotation.payload, text: nextText.trim() }
+                                  });
+                                }
+                              }}
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                            >
+                              Edit text
+                            </Button>
+                          ) : (
+                            <Button disabled size="sm" type="button" variant="outline">
+                              Edit shape
+                            </Button>
+                          )}
+                          <Button className="col-span-2" onClick={() => deleteAnnotation(annotation)} size="sm" type="button" variant="outline">
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            Remove annotation
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="rounded-3xl bg-secondary/60 p-4 text-sm">
