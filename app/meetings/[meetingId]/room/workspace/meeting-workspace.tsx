@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils/cn";
 import { getDocumentType, PPTX_FALLBACK_ERROR, sanitizeFilename } from "@/lib/validation/documents";
 import type { AnnotationTool } from "@/lib/validation/annotations";
 import type { Annotation, DocumentPage, Meeting, MeetingDocument, MeetingParticipant, ParticipantPermission, Profile, ScreenShareSession } from "@/types/app";
+import type { Json } from "@/types/database";
 
 const AnnotationCanvas = dynamic<AnnotationCanvasProps>(() => import("./annotation-canvas").then((module) => module.AnnotationCanvas), {
   ssr: false,
@@ -110,6 +111,8 @@ type WorkspaceAnnotationsResult = {
   error?: string;
 };
 
+type AnnotationSaveStatus = "idle" | "saving" | "saved" | "error";
+
 function createWhiteboardSvg(title: string) {
   return new Blob(
     [
@@ -161,6 +164,7 @@ export function MeetingWorkspace({
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const boardSectionRef = useRef<HTMLDivElement>(null);
   const boardScrollRef = useRef<HTMLDivElement>(null);
+  const quickUploadInputRef = useRef<HTMLInputElement>(null);
   const meetingChannelRef = useRef<RealtimeChannel | null>(null);
   const suppressScrollBroadcastRef = useRef(false);
   const lastScrollBroadcastRef = useRef(0);
@@ -183,6 +187,8 @@ export function MeetingWorkspace({
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [leavingMeeting, setLeavingMeeting] = useState(false);
   const [stageMode, setStageMode] = useState<MeetingStageMode>("board");
+  const [annotationSaveStatus, setAnnotationSaveStatus] = useState<AnnotationSaveStatus>("idle");
+  const [lastAnnotationSavedAt, setLastAnnotationSavedAt] = useState<Date | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? null;
@@ -711,6 +717,7 @@ export function MeetingWorkspace({
   async function createAnnotation(type: AnnotationTool, payload: Record<string, unknown>, annotationColor: string) {
     if (!selectedDocument || !selectedPage) return;
     setMessage(null);
+    setAnnotationSaveStatus("saving");
 
     const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
       body: {
@@ -723,13 +730,41 @@ export function MeetingWorkspace({
         payload
       }
     });
-    const annotation = data?.annotation;
+    let annotation = data?.annotation;
+    let fallbackMessage: string | null = null;
 
-    if (error || !annotation) {
-      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotation could not be saved." });
+    if (error || data?.error || !annotation) {
+      const fallback = await supabase.rpc("create_annotation_with_event", {
+        p_meeting_id: meeting.id,
+        p_document_id: selectedDocument.id,
+        p_page_id: selectedPage.id,
+        p_annotation_type: type,
+        p_color: annotationColor,
+        p_payload: payload as Json
+      });
+
+      if (!fallback.error && fallback.data) {
+        annotation = fallback.data as Annotation;
+      } else {
+        fallbackMessage = fallback.error?.message ?? null;
+      }
+    }
+
+    if (!annotation) {
+      setAnnotationSaveStatus("error");
+      setMessage({
+        type: "error",
+        text:
+          data?.error ??
+          fallbackMessage ??
+          error?.message ??
+          "Annotation could not be saved. Deploy `workspace-annotations` and push the latest migrations, then refresh this room."
+      });
       return;
     }
 
+    setAnnotationSaveStatus("saved");
+    setLastAnnotationSavedAt(new Date());
     setAnnotations((current) => [...current, annotation]);
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationCreated, { annotationId: annotation.id, pageId: selectedPage.id });
   }
@@ -1000,8 +1035,26 @@ export function MeetingWorkspace({
 
   const selectedPageIndex = selectedDocumentPages.findIndex((page) => page.id === selectedPage?.id);
 
+  const annotationStatusText =
+    annotationSaveStatus === "saving"
+      ? "Saving annotation..."
+      : annotationSaveStatus === "saved"
+        ? `Saved${lastAnnotationSavedAt ? ` ${lastAnnotationSavedAt.toLocaleTimeString()}` : ""}`
+        : annotationSaveStatus === "error"
+          ? "Save failed"
+          : "Ready";
+
   return (
-    <div className="space-y-5">
+    <div className="-mx-3 -mb-28 -mt-4 min-h-[calc(100svh-5rem)] space-y-4 rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.25),transparent_32%),linear-gradient(135deg,#020617,#111827_55%,#0f172a)] p-3 shadow-[0_32px_120px_-54px_rgba(15,23,42,0.9)] sm:-mx-5 sm:p-4 lg:-mx-8 lg:-mt-5 lg:p-5">
+      <input
+        ref={quickUploadInputRef}
+        disabled={uploading || savingSnapshot}
+        className="sr-only"
+        type="file"
+        accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx"
+        onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
+      />
+
       {message ? (
         <Alert className={message.type === "error" ? "border-destructive/30 bg-destructive/5 text-destructive" : message.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-primary/20 bg-primary/5 text-primary"}>
           <AlertTitle>{message.type === "error" ? "Workspace issue" : message.type === "success" ? "Workspace updated" : "Workspace notice"}</AlertTitle>
@@ -1019,13 +1072,20 @@ export function MeetingWorkspace({
         </Alert>
       ) : null}
 
-      <div className="rounded-[2rem] border border-white/70 bg-slate-950 p-3 text-white shadow-soft sm:p-4 lg:hidden">
-        <div className="flex items-center justify-between gap-3">
+      <div className="rounded-[2rem] border border-white/10 bg-white/10 p-3 text-white shadow-soft backdrop-blur-xl sm:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <p className="truncate text-sm font-black">{getStageModeLabel(stageMode)}</p>
-            <p className="truncate text-xs text-white/65">Meet-style room controls for board and live screen.</p>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge variant={meeting.status === "live" ? "success" : "secondary"}>{meeting.status}</Badge>
+              <Badge variant={annotationSaveStatus === "error" ? "outline" : annotationSaveStatus === "saved" ? "success" : "secondary"}>{annotationStatusText}</Badge>
+              <Badge variant={meeting.document_locked ? "outline" : "secondary"}>{meeting.document_locked ? "Board locked" : "Board open"}</Badge>
+            </div>
+            <p className="truncate text-lg font-black sm:text-2xl">{getStageModeLabel(stageMode)}</p>
+            <p className="truncate text-xs text-white/65 sm:text-sm">
+              {selectedDocument ? selectedDocument.title : "No board selected"} · {presenceUsers.length} online · Code {meeting.code}
+            </p>
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2">
             <Button onClick={focusBoardStage} size="sm" type="button" variant={boardIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
@@ -1034,6 +1094,18 @@ export function MeetingWorkspace({
               <Button onClick={focusScreenStage} size="sm" type="button" variant={screenIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
                 <MonitorUp className="h-4 w-4" aria-hidden="true" />
                 Screen
+              </Button>
+            ) : null}
+            {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
+              <Button onClick={startWorkspace} disabled={isPending} size="sm" type="button" className="rounded-2xl">
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
+                Start
+              </Button>
+            ) : null}
+            {profile.role === "participant" ? (
+              <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" variant="outline" className="rounded-2xl border-white/25 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                {leavingMeeting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogOut className="h-4 w-4" aria-hidden="true" />}
+                Leave
               </Button>
             ) : null}
           </div>
@@ -1084,10 +1156,10 @@ export function MeetingWorkspace({
         />
       ) : null}
 
-      <div className={cn("grid gap-5", boardIsMainStage ? "lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]" : "lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]")}>
+      <div className={cn("grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]")}>
         {boardIsMainStage ? (
-        <Card ref={boardSectionRef} id="annotation-board" className="min-h-[calc(100svh-12rem)] scroll-mt-4 bg-white/85 backdrop-blur">
-          <CardHeader>
+        <Card ref={boardSectionRef} id="annotation-board" className="min-h-[calc(100svh-14rem)] overflow-hidden scroll-mt-4 border-white/70 bg-white/96 shadow-[0_30px_90px_-42px_rgba(15,23,42,0.75)] backdrop-blur">
+          <CardHeader className="pb-3">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <CardTitle>Shared annotation workspace</CardTitle>
@@ -1118,7 +1190,7 @@ export function MeetingWorkspace({
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             <div className="flex flex-col gap-3 rounded-3xl border border-border/70 bg-white/75 p-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
                 {tools.map((item) => (
@@ -1153,7 +1225,7 @@ export function MeetingWorkspace({
               <div
                 ref={boardScrollRef}
                 onScroll={broadcastBoardViewport}
-                className="max-h-[calc(100svh-11rem)] overflow-auto rounded-3xl border border-border/60 bg-white/40 p-2 shadow-inner overscroll-contain sm:max-h-[calc(100svh-14rem)]"
+                className="h-[calc(100svh-27rem)] min-h-[360px] overflow-auto rounded-3xl border border-border/60 bg-white/40 p-2 shadow-inner overscroll-contain sm:h-[calc(100svh-25rem)] lg:h-[calc(100svh-23rem)] xl:h-[calc(100svh-22rem)]"
               >
                 <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange}>
                   <AnnotationCanvas
@@ -1444,6 +1516,14 @@ export function MeetingWorkspace({
               </Button>
               <Button onClick={() => setDocumentLocked(!meeting.document_locked)} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
                 {meeting.document_locked ? "Unlock" : "Lock"}
+              </Button>
+              <Button onClick={() => quickUploadInputRef.current?.click()} disabled={uploading || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                <FileUp className="h-4 w-4" aria-hidden="true" />
+                Upload
+              </Button>
+              <Button onClick={createWhiteboard} disabled={uploading || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Whiteboard
               </Button>
               {meeting.status !== "completed" ? (
                 <Button onClick={endMeeting} disabled={isPending || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl text-red-100 hover:text-red-950">
