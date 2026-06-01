@@ -385,7 +385,22 @@ export type Database = {
       is_presenter: { Args: Record<string, never>; Returns: boolean };
       is_meeting_presenter: { Args: { meeting_id: string }; Returns: boolean };
       is_meeting_member: { Args: { meeting_id: string }; Returns: boolean };
-      can_user_annotate: { Args: { meeting_id: string; user_id: string }; Returns: boolean };
+      can_user_annotate: { Args: { p_meeting_id: string; p_user_id: string }; Returns: boolean };
+      document_page_belongs_to_meeting: {
+        Args: { p_meeting_id: string; p_document_id: string; p_page_id: string };
+        Returns: boolean;
+      };
+      create_annotation_with_event: {
+        Args: {
+          p_meeting_id: string;
+          p_document_id: string;
+          p_page_id: string;
+          p_annotation_type: Database["public"]["Enums"]["annotation_type"];
+          p_color: string;
+          p_payload: Json;
+        };
+        Returns: Database["public"]["Tables"]["annotations"]["Row"];
+      };
     };
     CompositeTypes: Record<string, never>;
   };

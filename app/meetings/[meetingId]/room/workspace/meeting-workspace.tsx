@@ -1,12 +1,34 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { FileUp, Highlighter, Image as ImageIcon, Loader2, Lock, LockOpen, MousePointer2, PenLine, PlayCircle, Presentation, RectangleHorizontal, Trash2, Type, UsersRound } from "lucide-react";
+import {
+  Download,
+  FileText,
+  FileUp,
+  Highlighter,
+  Image as ImageIcon,
+  Loader2,
+  Lock,
+  LockOpen,
+  LogOut,
+  Maximize2,
+  MonitorUp,
+  MousePointer2,
+  PenLine,
+  PlayCircle,
+  Plus,
+  Presentation,
+  RectangleHorizontal,
+  StopCircle,
+  Trash2,
+  Type,
+  UsersRound
+} from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
-import { startMeetingWorkspaceAction } from "../actions";
+import { endMeetingAction, startMeetingWorkspaceAction } from "../actions";
 import type { AnnotationCanvasProps } from "./annotation-canvas";
 import { type BoardSize, DocumentRenderer } from "./document-renderer";
 import { ScreenSharePanel } from "./screen-share-panel";
@@ -16,8 +38,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getImagePageDraft, getPdfPageDrafts, type PageDraft } from "@/lib/documents/page-drafts";
 import { canConnectToScreenShare, canUsePresenterConsoleControls, createScreenShareRoomName, type WorkspaceMode } from "@/lib/livekit/permissions";
+import { canAnnotateInStage, getStageModeLabel, type MeetingStageMode } from "@/lib/meetings/meeting-stage";
 import { REALTIME_EVENTS } from "@/lib/meetings/realtime-events";
+import { getMeetingLeaveDestination, hasSavableAnnotations } from "@/lib/meetings/workspace-safety";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { cn } from "@/lib/utils/cn";
 import { getDocumentType, PPTX_FALLBACK_ERROR, sanitizeFilename } from "@/lib/validation/documents";
 import type { AnnotationTool } from "@/lib/validation/annotations";
 import type { Annotation, DocumentPage, Meeting, MeetingDocument, MeetingParticipant, ParticipantPermission, Profile, ScreenShareSession } from "@/types/app";
@@ -72,6 +97,26 @@ type BoardViewportPayload = {
   sourceUserId: string;
 };
 
+type WorkspaceExportResult = {
+  status: "completed" | "failed";
+  signedUrl?: string | null;
+  storagePath?: string;
+  error?: string;
+};
+
+function createWhiteboardSvg(title: string) {
+  return new Blob(
+    [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-label="${title}">
+  <rect width="1600" height="1000" fill="#fffdf7"/>
+  <path d="M0 80H1600M0 160H1600M0 240H1600M0 320H1600M0 400H1600M0 480H1600M0 560H1600M0 640H1600M0 720H1600M0 800H1600M0 880H1600M0 960H1600" stroke="#e9e2d2" stroke-width="2"/>
+  <path d="M80 0V1000M160 0V1000M240 0V1000M320 0V1000M400 0V1000M480 0V1000M560 0V1000M640 0V1000M720 0V1000M800 0V1000M880 0V1000M960 0V1000M1040 0V1000M1120 0V1000M1200 0V1000M1280 0V1000M1360 0V1000M1440 0V1000M1520 0V1000" stroke="#f1eadc" stroke-width="2"/>
+</svg>`
+    ],
+    { type: "image/svg+xml" }
+  );
+}
+
 function getScrollRatio({ value, max }: { value: number; max: number }) {
   if (max <= 0) return 0;
   return Math.max(0, Math.min(1, value / max));
@@ -114,6 +159,7 @@ export function MeetingWorkspace({
   const suppressScrollBroadcastRef = useRef(false);
   const lastScrollBroadcastRef = useRef(0);
   const [meeting, setMeeting] = useState(initialMeeting);
+  const [participants, setParticipants] = useState(initialParticipants);
   const [documents, setDocuments] = useState(initialDocuments);
   const [pages, setPages] = useState(initialPages);
   const [annotations, setAnnotations] = useState(initialAnnotations);
@@ -126,8 +172,11 @@ export function MeetingWorkspace({
   const [color, setColor] = useState(profile.color ?? "#0f4c5c");
   const [board, setBoard] = useState<BoardSize>(defaultBoard);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
-  const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string; signedUrl?: string | null } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+  const [leavingMeeting, setLeavingMeeting] = useState(false);
+  const [stageMode, setStageMode] = useState<MeetingStageMode>("board");
   const [isPending, startTransition] = useTransition();
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? null;
@@ -137,13 +186,28 @@ export function MeetingWorkspace({
   const canUsePresenterControls = canUsePresenterConsoleControls({ profile, meeting, mode });
   const currentPermission = profile.role === "participant" ? permissions.find((permission) => permission.user_id === profile.id) ?? null : null;
   const canUpload = canUsePresenterControls;
-  const canAnnotate = Boolean(selectedDocument && selectedPage && isRenderableDocument(selectedDocument) && canCurrentUserAnnotate({ profile, meeting, permission: currentPermission }));
-  const participantControlRows = initialParticipants.filter((participant) => participant.role_snapshot === "participant");
+  const canUseScreenShare = canConnectToScreenShare(profile.role);
+  const boardIsMainStage = stageMode === "board";
+  const screenIsMainStage = stageMode === "screen";
+  const canAnnotateByPermission = Boolean(selectedDocument && selectedPage && isRenderableDocument(selectedDocument) && canCurrentUserAnnotate({ profile, meeting, permission: currentPermission }));
+  const canAnnotate = canAnnotateInStage(canAnnotateByPermission, stageMode);
+  const participantControlRows = participants.filter((participant) => participant.role_snapshot === "participant");
+  const selectedDocumentHasAnnotations = hasSavableAnnotations(annotations, selectedDocumentId);
 
   const onSizeChange = useCallback((size: BoardSize) => setBoard(size), []);
 
   const scrollToBoard = useCallback(() => {
     boardSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const focusBoardStage = useCallback(() => {
+    setStageMode("board");
+    window.setTimeout(() => scrollToBoard(), 50);
+  }, [scrollToBoard]);
+
+  const focusScreenStage = useCallback(() => {
+    setStageMode("screen");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
   const sendMeetingBroadcast = useCallback(
@@ -163,12 +227,12 @@ export function MeetingWorkspace({
     window.setTimeout(() => {
       const container = boardScrollRef.current;
       if (container) applyScrollRatio(container, payload.topRatio, payload.leftRatio);
-      scrollToBoard();
+      if (stageMode === "board") scrollToBoard();
       window.setTimeout(() => {
         suppressScrollBroadcastRef.current = false;
       }, 350);
     }, 80);
-  }, [profile.id, scrollToBoard]);
+  }, [profile.id, scrollToBoard, stageMode]);
 
   const refetchDocuments = useCallback(async () => {
     const [{ data: docs }, { data: pageRows }] = await Promise.all([
@@ -194,6 +258,11 @@ export function MeetingWorkspace({
   const refetchPermissions = useCallback(async () => {
     const { data } = await supabase.from("participant_permissions").select("*").eq("meeting_id", meeting.id);
     setPermissions((data ?? []) as ParticipantPermission[]);
+  }, [meeting.id, supabase]);
+
+  const refetchParticipants = useCallback(async () => {
+    const { data } = await supabase.from("meeting_participants").select("*").eq("meeting_id", meeting.id).order("joined_at", { ascending: true });
+    setParticipants((data ?? []) as MeetingParticipant[]);
   }, [meeting.id, supabase]);
 
   const refetchScreenShareSession = useCallback(async () => {
@@ -272,10 +341,20 @@ export function MeetingWorkspace({
         }
       })
       .on("broadcast", { event: REALTIME_EVENTS.meetingStatusChanged }, ({ payload }) => {
-        if (payload?.status === "live" || payload?.status === "scheduled" || payload?.status === "paused") {
+        if (payload?.status === "live" || payload?.status === "scheduled" || payload?.status === "paused" || payload?.status === "completed" || payload?.status === "cancelled") {
           setMeeting((current) => ({ ...current, status: payload.status }));
+          if (payload.status === "completed") {
+            setScreenShareSession(null);
+            void refetchParticipants();
+          }
         }
       })
+      .on("broadcast", { event: REALTIME_EVENTS.participantJoined }, () => void refetchParticipants())
+      .on("broadcast", { event: REALTIME_EVENTS.participantLeft }, () => void refetchParticipants())
+      .on("broadcast", { event: REALTIME_EVENTS.annotationCreated }, () => void refetchAnnotations())
+      .on("broadcast", { event: REALTIME_EVENTS.annotationUpdated }, () => void refetchAnnotations())
+      .on("broadcast", { event: REALTIME_EVENTS.annotationDeleted }, () => void refetchAnnotations())
+      .on("broadcast", { event: REALTIME_EVENTS.annotationsCleared }, () => void refetchAnnotations())
       .on("broadcast", { event: REALTIME_EVENTS.permissionsChanged }, ({ payload }) => {
         setMeeting((current) => ({
           ...current,
@@ -290,13 +369,21 @@ export function MeetingWorkspace({
       .on("broadcast", { event: REALTIME_EVENTS.screenStarted }, () => void refetchScreenShareSession())
       .on("broadcast", { event: REALTIME_EVENTS.screenPaused }, () => void refetchScreenShareSession())
       .on("broadcast", { event: REALTIME_EVENTS.screenStopped }, () => void refetchScreenShareSession())
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED" && profile.role === "participant") {
+          void channel.send({
+            type: "broadcast",
+            event: REALTIME_EVENTS.participantJoined,
+            payload: { userId: profile.id }
+          });
+        }
+      });
 
     return () => {
       meetingChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [applyRemoteBoardViewport, canUsePresenterControls, meeting.id, refetchDocuments, refetchPermissions, refetchScreenShareSession, scrollToBoard, supabase]);
+  }, [applyRemoteBoardViewport, canUsePresenterControls, meeting.id, profile.id, profile.role, refetchAnnotations, refetchDocuments, refetchParticipants, refetchPermissions, refetchScreenShareSession, scrollToBoard, supabase]);
 
   useEffect(() => {
     if (!selectedPageId) return;
@@ -350,8 +437,47 @@ export function MeetingWorkspace({
     return [];
   }
 
+  async function saveAnnotatedSnapshot(reason: string) {
+    setSavingSnapshot(true);
+    setMessage(null);
+
+    const { data, error } = await supabase.functions.invoke<WorkspaceExportResult>("generate-export", {
+      body: { meetingId: meeting.id, exportType: "annotated_pdf" }
+    });
+
+    setSavingSnapshot(false);
+
+    if (error || !data || data.status === "failed") {
+      setMessage({ type: "error", text: error?.message ?? data?.error ?? "Annotated PDF could not be saved." });
+      return false;
+    }
+
+    setMessage({
+      type: "success",
+      text: `Annotated PDF saved before ${reason}. The signed link is valid for 10 minutes.`,
+      signedUrl: data.signedUrl
+    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.exportReady, { exportType: "annotated_pdf", storagePath: data.storagePath ?? null });
+    return true;
+  }
+
+  async function confirmSaveBeforeContinuing(reason: string) {
+    if (!selectedDocumentHasAnnotations) return true;
+
+    const shouldSave = window.confirm(
+      `This board already has annotations. Save an annotated PDF before ${reason}?\n\nOK: save first and continue.\nCancel: choose whether to continue without saving.`
+    );
+
+    if (shouldSave) return saveAnnotatedSnapshot(reason);
+
+    return window.confirm(`Continue ${reason} without saving an annotated PDF first?`);
+  }
+
   async function handleUpload(file: File | null) {
     if (!file || !canUpload) return;
+    const canContinue = await confirmSaveBeforeContinuing("uploading a new document");
+    if (!canContinue) return;
+
     setUploading(true);
     setMessage(null);
 
@@ -448,6 +574,75 @@ export function MeetingWorkspace({
     }
   }
 
+  async function createWhiteboard() {
+    if (!canUpload) return;
+    const canContinue = await confirmSaveBeforeContinuing("creating a new whiteboard");
+    if (!canContinue) return;
+
+    setUploading(true);
+    setMessage(null);
+
+    try {
+      const documentId = crypto.randomUUID();
+      const title = `Whiteboard ${new Date().toLocaleString()}`;
+      const filename = `whiteboard-${Date.now()}.svg`;
+      const whiteboard = createWhiteboardSvg(title);
+      const storagePath = `${meeting.id}/${documentId}/original/${filename}`;
+
+      const upload = await supabase.storage.from("meeting-documents").upload(storagePath, whiteboard, {
+        contentType: "image/svg+xml",
+        upsert: false
+      });
+
+      if (upload.error) throw upload.error;
+
+      const { data: documentRow, error: documentError } = await supabase
+        .from("meeting_documents")
+        .insert({
+          id: documentId,
+          meeting_id: meeting.id,
+          uploaded_by: profile.id,
+          title,
+          document_type: "image",
+          storage_path: storagePath,
+          original_filename: filename,
+          mime_type: "image/svg+xml",
+          file_size_bytes: whiteboard.size,
+          conversion_status: "ready",
+          page_count: 1
+        })
+        .select("*")
+        .single();
+
+      if (documentError || !documentRow) throw documentError ?? new Error("Whiteboard metadata could not be created.");
+
+      const { data: pageRow, error: pageError } = await supabase
+        .from("document_pages")
+        .insert({
+          document_id: documentId,
+          meeting_id: meeting.id,
+          page_number: 1,
+          width: 1600,
+          height: 1000
+        })
+        .select("*")
+        .single();
+
+      if (pageError || !pageRow) throw pageError ?? new Error("Whiteboard page could not be created.");
+
+      setDocuments((current) => [documentRow as MeetingDocument, ...current]);
+      setPages((current) => [...current, pageRow as DocumentPage]);
+      await selectDocumentPage(documentRow as MeetingDocument, pageRow as DocumentPage, { silent: true });
+      await sendMeetingBroadcast(REALTIME_EVENTS.documentUploaded, { documentId, pageId: pageRow.id });
+      setMessage({ type: "success", text: "Whiteboard created and broadcast to participants." });
+      router.refresh();
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Whiteboard could not be created." });
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function selectDocumentPage(document: MeetingDocument, page: DocumentPage, options?: { silent?: boolean }) {
     if (!canUsePresenterControls) return;
 
@@ -504,51 +699,22 @@ export function MeetingWorkspace({
     if (!selectedDocument || !selectedPage) return;
     setMessage(null);
 
-    const { data: annotation, error } = await supabase
-      .from("annotations")
-      .insert({
-        meeting_id: meeting.id,
-        document_id: selectedDocument.id,
-        page_id: selectedPage.id,
-        user_id: profile.id,
-        user_name_snapshot: profile.full_name,
-        designation_snapshot: profile.designation,
-        role_snapshot: profile.role,
-        annotation_type: type,
-        color: annotationColor,
-        payload: payload as Json
-      })
-      .select("*")
-      .single();
+    const { data: annotation, error } = await supabase.rpc("create_annotation_with_event", {
+      p_meeting_id: meeting.id,
+      p_document_id: selectedDocument.id,
+      p_page_id: selectedPage.id,
+      p_annotation_type: type,
+      p_color: annotationColor,
+      p_payload: payload as Json
+    });
 
     if (error || !annotation) {
       setMessage({ type: "error", text: error?.message ?? "Annotation could not be saved." });
       return;
     }
 
-    await supabase.from("annotation_events").insert({
-      annotation_id: annotation.id,
-      meeting_id: meeting.id,
-      document_id: selectedDocument.id,
-      page_id: selectedPage.id,
-      user_id: profile.id,
-      event_type: "created",
-      after_payload: annotation.payload as Json,
-      metadata: {
-        userName: profile.full_name,
-        designation: profile.designation,
-        role: profile.role,
-        annotationType: type,
-        color: annotationColor
-      }
-    });
-
     setAnnotations((current) => [...current, annotation as Annotation]);
-    await supabase.channel(`meeting:${meeting.id}:page:${selectedPage.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.annotationCreated,
-      payload: { annotationId: annotation.id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationCreated, { annotationId: annotation.id, pageId: selectedPage.id });
   }
 
   async function deleteAnnotation(annotation: Annotation) {
@@ -583,11 +749,7 @@ export function MeetingWorkspace({
     });
 
     setAnnotations((current) => current.filter((item) => item.id !== annotation.id));
-    await supabase.channel(`meeting:${meeting.id}:page:${annotation.page_id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.annotationDeleted,
-      payload: { annotationId: annotation.id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationDeleted, { annotationId: annotation.id, pageId: annotation.page_id });
   }
 
   async function updateAnnotation(
@@ -630,11 +792,7 @@ export function MeetingWorkspace({
     });
 
     setAnnotations((current) => current.map((item) => (item.id === annotation.id ? (updated as Annotation) : item)));
-    await supabase.channel(`meeting:${meeting.id}:page:${annotation.page_id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.annotationUpdated,
-      payload: { annotationId: annotation.id }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationUpdated, { annotationId: annotation.id, pageId: annotation.page_id });
     setMessage({ type: "success", text: "Annotation updated for everyone." });
   }
 
@@ -717,11 +875,7 @@ export function MeetingWorkspace({
     });
 
     setAnnotations((current) => current.filter((annotation) => annotation.page_id !== selectedPage.id));
-    await supabase.channel(`meeting:${meeting.id}:page:${selectedPage.id}`).send({
-      type: "broadcast",
-      event: REALTIME_EVENTS.annotationsCleared,
-      payload: { pageId: selectedPage.id, clearCount }
-    });
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationsCleared, { pageId: selectedPage.id, clearCount });
     setMessage({ type: "success", text: `Cleared ${clearCount} annotation${clearCount === 1 ? "" : "s"} from the selected page.` });
   }
 
@@ -846,6 +1000,36 @@ export function MeetingWorkspace({
     });
   }
 
+  async function leaveMeeting() {
+    if (leavingMeeting) return;
+    setLeavingMeeting(true);
+    await fetch(`/meetings/${meeting.id}/attendance/leave`, { method: "POST" });
+    await sendMeetingBroadcast(REALTIME_EVENTS.participantLeft, { userId: profile.id });
+    router.push(getMeetingLeaveDestination(profile.role));
+  }
+
+  function endMeeting() {
+    if (!canUsePresenterControls) return;
+    startTransition(async () => {
+      const canContinue = await confirmSaveBeforeContinuing("ending the meeting");
+      if (!canContinue) return;
+
+      const result = await endMeetingAction(meeting.id);
+      if (!result.ok) {
+        setMessage({ type: "error", text: result.message });
+        return;
+      }
+
+      setMeeting((current) => ({ ...current, status: "completed", ended_at: new Date().toISOString(), downloads_enabled: true }));
+      setScreenShareSession(null);
+      setParticipants((current) => current.map((participant) => ({ ...participant, is_present: false, left_at: participant.left_at ?? new Date().toISOString() })));
+      setMessage({ type: "success", text: result.message });
+      await sendMeetingBroadcast(REALTIME_EVENTS.meetingStatusChanged, { status: "completed" });
+      await sendMeetingBroadcast(REALTIME_EVENTS.screenStopped, { sessionId: screenShareSession?.id ?? null });
+      router.refresh();
+    });
+  }
+
   const selectedPageIndex = selectedDocumentPages.findIndex((page) => page.id === selectedPage?.id);
 
   return (
@@ -853,15 +1037,49 @@ export function MeetingWorkspace({
       {message ? (
         <Alert className={message.type === "error" ? "border-destructive/30 bg-destructive/5 text-destructive" : message.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-primary/20 bg-primary/5 text-primary"}>
           <AlertTitle>{message.type === "error" ? "Workspace issue" : message.type === "success" ? "Workspace updated" : "Workspace notice"}</AlertTitle>
-          <AlertDescription>{message.text}</AlertDescription>
+          <AlertDescription className="space-y-3">
+            <span className="block">{message.text}</span>
+            {message.signedUrl ? (
+              <Button asChild size="sm">
+                <a href={message.signedUrl} rel="noreferrer" target="_blank">
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  Download saved PDF
+                </a>
+              </Button>
+            ) : null}
+          </AlertDescription>
         </Alert>
       ) : null}
 
-      {canConnectToScreenShare(profile.role) ? (
+      <div className="rounded-[2rem] border border-white/70 bg-slate-950 p-3 text-white shadow-soft sm:p-4 lg:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black">{getStageModeLabel(stageMode)}</p>
+            <p className="truncate text-xs text-white/65">Meet-style room controls for board and live screen.</p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button onClick={focusBoardStage} size="sm" type="button" variant={boardIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
+              <FileText className="h-4 w-4" aria-hidden="true" />
+              Board
+            </Button>
+            {canUseScreenShare ? (
+              <Button onClick={focusScreenStage} size="sm" type="button" variant={screenIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
+                <MonitorUp className="h-4 w-4" aria-hidden="true" />
+                Screen
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {canUseScreenShare && screenIsMainStage ? (
         <ScreenSharePanel
           allowPresenterControls={canUsePresenterControls}
           meetingId={meeting.id}
-          onOpenBoard={scrollToBoard}
+          onOpenBoard={focusBoardStage}
+          onFocusBoard={focusBoardStage}
+          onFocusScreen={focusScreenStage}
+          presentation="stage"
           session={screenShareSession}
           onStarted={markScreenShareStarted}
           onPaused={markScreenSharePaused}
@@ -869,8 +1087,38 @@ export function MeetingWorkspace({
         />
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Card ref={boardSectionRef} id="annotation-board" className="scroll-mt-4 bg-white/85 backdrop-blur">
+      {screenIsMainStage ? (
+        <button
+          className="fixed bottom-[calc(env(safe-area-inset-bottom)+9.25rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),18rem)] rounded-[1.5rem] border border-white/70 bg-white/94 p-3 text-left shadow-[0_28px_90px_-30px_rgba(15,23,42,0.65)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white xl:bottom-6 xl:right-6"
+          onClick={focusBoardStage}
+          type="button"
+        >
+          <span className="flex items-center gap-2 text-sm font-black">
+            <FileText className="h-4 w-4 text-primary" aria-hidden="true" />
+            Annotation board
+          </span>
+          <span className="mt-1 block text-xs leading-5 text-muted-foreground">Parked while live screen is full. Tap to annotate.</span>
+        </button>
+      ) : null}
+
+      {canUseScreenShare && boardIsMainStage ? (
+        <ScreenSharePanel
+          allowPresenterControls={canUsePresenterControls}
+          meetingId={meeting.id}
+          onOpenBoard={focusBoardStage}
+          onFocusBoard={focusBoardStage}
+          onFocusScreen={focusScreenStage}
+          presentation="floating"
+          session={screenShareSession}
+          onStarted={markScreenShareStarted}
+          onPaused={markScreenSharePaused}
+          onStopped={markScreenShareStopped}
+        />
+      ) : null}
+
+      <div className={cn("grid gap-5", boardIsMainStage ? "lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]" : "lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]")}>
+        {boardIsMainStage ? (
+        <Card ref={boardSectionRef} id="annotation-board" className="min-h-[calc(100svh-12rem)] scroll-mt-4 bg-white/85 backdrop-blur">
           <CardHeader>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -881,10 +1129,22 @@ export function MeetingWorkspace({
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant={meeting.status === "live" ? "success" : "secondary"}>{meeting.status}</Badge>
-                {canUsePresenterControls && meeting.status !== "live" ? (
+                {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
                   <Button onClick={startWorkspace} disabled={isPending} size="sm">
                     {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
                     Start workspace
+                  </Button>
+                ) : null}
+                {canUsePresenterControls && meeting.status !== "completed" ? (
+                  <Button onClick={endMeeting} disabled={isPending || savingSnapshot} size="sm" variant="outline">
+                    {isPending || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <StopCircle className="h-4 w-4" aria-hidden="true" />}
+                    End meeting
+                  </Button>
+                ) : null}
+                {profile.role === "participant" ? (
+                  <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" variant="outline">
+                    {leavingMeeting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogOut className="h-4 w-4" aria-hidden="true" />}
+                    Leave meeting
                   </Button>
                 ) : null}
               </div>
@@ -945,6 +1205,8 @@ export function MeetingWorkspace({
               <p>
                 {canAnnotate
                   ? "Annotation is enabled for you. Draw with touch, stylus, or mouse."
+                  : canAnnotateByPermission && !boardIsMainStage
+                    ? "Annotation is paused while live screen is the main stage. Switch to Board to annotate."
                   : "Annotation is currently unavailable for your role, meeting status, selected document, or lock state."}
               </p>
               {selectedDocumentPages.length > 0 ? (
@@ -961,6 +1223,28 @@ export function MeetingWorkspace({
             </div>
           </CardContent>
         </Card>
+        ) : (
+          <Card ref={boardSectionRef} id="annotation-board" className="scroll-mt-4 border-white/70 bg-white/88 backdrop-blur">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-primary" aria-hidden="true" />
+                Annotation board parked
+              </CardTitle>
+              <CardDescription>
+                Live screen is the main stage. The board is intentionally read-only while parked so touch gestures do not create accidental annotations.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button className="w-full rounded-2xl" onClick={focusBoardStage} type="button">
+                <Maximize2 className="h-4 w-4" aria-hidden="true" />
+                Open board full screen
+              </Button>
+              <p className="rounded-2xl bg-secondary/70 p-3 text-sm text-muted-foreground">
+                Switch back to the board to annotate with touch, stylus, or mouse. Presenter page/scroll broadcasts are still remembered while you watch the screen.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         <aside className="space-y-5 lg:sticky lg:top-4 lg:self-start">
           {canUsePresenterControls ? (
@@ -1083,17 +1367,24 @@ export function MeetingWorkspace({
             </CardHeader>
             <CardContent className="space-y-4">
               {canUpload ? (
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-primary/30 bg-primary/5 p-5 text-center text-sm font-semibold text-primary">
-                  {uploading ? <Loader2 className="mb-2 h-6 w-6 animate-spin" aria-hidden="true" /> : <FileUp className="mb-2 h-6 w-6" aria-hidden="true" />}
-                  Upload PDF, image, PPT, or PPTX
-                  <input
-                    disabled={uploading}
-                    className="sr-only"
-                    type="file"
-                    accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx"
-                    onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
-                  />
-                </label>
+                <div className="grid gap-3">
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-primary/30 bg-primary/5 p-5 text-center text-sm font-semibold text-primary">
+                    {uploading || savingSnapshot ? <Loader2 className="mb-2 h-6 w-6 animate-spin" aria-hidden="true" /> : <FileUp className="mb-2 h-6 w-6" aria-hidden="true" />}
+                    Upload PDF, image, PPT, or PPTX
+                    {selectedDocumentHasAnnotations ? <span className="mt-1 text-xs font-medium text-muted-foreground">You will be asked to save the current annotations first.</span> : null}
+                    <input
+                      disabled={uploading || savingSnapshot}
+                      className="sr-only"
+                      type="file"
+                      accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx"
+                      onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline">
+                    {uploading || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
+                    New whiteboard
+                  </Button>
+                </div>
               ) : null}
 
               <div className="space-y-3">
@@ -1154,6 +1445,53 @@ export function MeetingWorkspace({
             </CardContent>
           </Card>
         </aside>
+      </div>
+
+      <div className="pointer-events-none fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+4.85rem)] z-30 xl:hidden">
+        <div className="pointer-events-auto mx-auto flex max-w-3xl items-center gap-2 overflow-x-auto rounded-[1.75rem] border border-white/70 bg-slate-950/92 p-2 text-white shadow-[0_24px_80px_-34px_rgba(15,23,42,0.85)] backdrop-blur-xl [scrollbar-width:none]">
+          <Button onClick={focusBoardStage} size="sm" type="button" variant={boardIsMainStage ? "secondary" : "ghost"} className="min-h-12 shrink-0 rounded-2xl">
+            <FileText className="h-4 w-4" aria-hidden="true" />
+            Board
+          </Button>
+          {canUseScreenShare ? (
+            <Button onClick={focusScreenStage} size="sm" type="button" variant={screenIsMainStage ? "secondary" : "ghost"} className="min-h-12 shrink-0 rounded-2xl">
+              <MonitorUp className="h-4 w-4" aria-hidden="true" />
+              Screen
+            </Button>
+          ) : null}
+          {selectedDocumentPages.length > 0 ? (
+            <>
+              <Button disabled={!canUsePresenterControls || selectedPageIndex <= 0} onClick={() => changePage(selectedDocumentPages[selectedPageIndex - 1])} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                Prev
+              </Button>
+              <Button disabled={!canUsePresenterControls || selectedPageIndex < 0 || selectedPageIndex >= selectedDocumentPages.length - 1} onClick={() => changePage(selectedDocumentPages[selectedPageIndex + 1])} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                Next
+              </Button>
+            </>
+          ) : null}
+          {canUsePresenterControls ? (
+            <>
+              <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                {meeting.participant_annotation_enabled ? "Annotate on" : "Annotate off"}
+              </Button>
+              <Button onClick={() => setDocumentLocked(!meeting.document_locked)} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
+                {meeting.document_locked ? "Unlock" : "Lock"}
+              </Button>
+              {meeting.status !== "completed" ? (
+                <Button onClick={endMeeting} disabled={isPending || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl text-red-100 hover:text-red-950">
+                  <StopCircle className="h-4 w-4" aria-hidden="true" />
+                  End
+                </Button>
+              ) : null}
+            </>
+          ) : null}
+          {profile.role === "participant" ? (
+            <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl text-red-100 hover:text-red-950">
+              <LogOut className="h-4 w-4" aria-hidden="true" />
+              Leave
+            </Button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

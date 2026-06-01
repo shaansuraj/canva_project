@@ -1,5 +1,7 @@
 ﻿export const REALTIME_EVENTS = {
   meetingStatusChanged: "meeting.status.changed",
+  participantJoined: "participant.joined",
+  participantLeft: "participant.left",
   documentUploaded: "document.uploaded",
   documentSelected: "document.selected",
   pageChanged: "page.changed",
