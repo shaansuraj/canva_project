@@ -61,7 +61,7 @@ export type ParticipantPermission = {
   updated_at: string;
 };
 
-export type DocumentType = "pdf" | "image" | "pptx" | "ppt";
+export type DocumentType = "pdf" | "image" | "pptx" | "ppt" | "doc" | "docx" | "xls" | "xlsx";
 export type ConversionStatus = "pending" | "processing" | "ready" | "failed";
 export type AnnotationType = "pen" | "highlighter" | "text" | "rectangle" | "circle" | "line" | "arrow" | "eraser";
 export type AnnotationEventType = "created" | "updated" | "deleted" | "cleared";

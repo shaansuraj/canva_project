@@ -78,7 +78,25 @@ export async function MeetingExperience({ meetingId, mode }: { meetingId: string
       <div className="space-y-5">
         {profile.role !== "admin" ? <AttendanceHeartbeat meetingId={meetingId} profile={profile} /> : null}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <MeetingWorkspace
+          initialMeeting={typedMeeting}
+          profile={profile}
+          mode={mode}
+          initialParticipants={participantRows}
+          initialPermissions={(permissions ?? []) as ParticipantPermission[]}
+          initialScreenShareSession={((screenShareSessions ?? [])[0] ?? null) as ScreenShareSession | null}
+          initialDocuments={(documents ?? []) as MeetingDocument[]}
+          initialPages={(pages ?? []) as DocumentPage[]}
+          initialAnnotations={(annotations ?? []) as Annotation[]}
+        />
+
+        <details className="group rounded-[2rem] border border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]" open={profile.role === "admin"}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 text-sm font-black">
+            <span>Meeting info and attendance</span>
+            <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs uppercase tracking-[0.12em] text-slate-200 group-open:hidden">Show</span>
+            <span className="hidden rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs uppercase tracking-[0.12em] text-slate-200 group-open:inline-flex">Hide</span>
+          </summary>
+          <div className="grid gap-4 border-t border-white/10 p-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
           <Card className="overflow-hidden border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-48px_rgba(0,0,0,0.95)]">
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -141,19 +159,8 @@ export async function MeetingExperience({ meetingId, mode }: { meetingId: string
               )}
             </CardContent>
           </Card>
-        </div>
-
-        <MeetingWorkspace
-          initialMeeting={typedMeeting}
-          profile={profile}
-          mode={mode}
-          initialParticipants={participantRows}
-          initialPermissions={(permissions ?? []) as ParticipantPermission[]}
-          initialScreenShareSession={((screenShareSessions ?? [])[0] ?? null) as ScreenShareSession | null}
-          initialDocuments={(documents ?? []) as MeetingDocument[]}
-          initialPages={(pages ?? []) as DocumentPage[]}
-          initialAnnotations={(annotations ?? []) as Annotation[]}
-        />
+          </div>
+        </details>
 
         <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
           <CardContent className="flex flex-col gap-3 p-5 text-sm text-slate-300 sm:flex-row sm:items-center">

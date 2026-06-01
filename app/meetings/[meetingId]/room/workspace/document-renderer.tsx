@@ -75,7 +75,9 @@ export function DocumentRenderer({
           <img alt={document.title} className="block h-auto w-full select-none" draggable={false} src={signedUrl} />
         ) : (
           <div className="flex min-h-[320px] items-center justify-center p-8 text-center text-sm text-muted-foreground">
-            PPT/PPTX files need conversion before annotation. Upload a PDF for immediate annotation.
+            {document.conversion_status === "failed"
+              ? (document.conversion_error ?? "This Office file is saved, but conversion is not configured. Upload a PDF for immediate annotation.")
+              : "This Office file is saved and needs conversion before annotation. Upload a PDF for immediate annotation."}
           </div>
         )}
         <div className="absolute inset-0" style={{ width, height }}>

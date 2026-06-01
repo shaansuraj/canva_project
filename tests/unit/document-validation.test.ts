@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getDocumentType, isAcceptedDocument, PPTX_FALLBACK_ERROR, sanitizeFilename, uploadDocumentSchema } from "@/lib/validation/documents";
+import { getDocumentType, getOfficeConversionFallbackError, isAcceptedDocument, OFFICE_FALLBACK_ERROR, PPTX_FALLBACK_ERROR, sanitizeFilename, uploadDocumentSchema } from "@/lib/validation/documents";
 
 describe("phase 3 document validation", () => {
   it("classifies supported MVP document types", () => {
@@ -8,12 +8,16 @@ describe("phase 3 document validation", () => {
     expect(getDocumentType("whiteboard.PNG", "image/png")).toBe("image");
     expect(getDocumentType("strategy.pptx")).toBe("pptx");
     expect(getDocumentType("legacy-deck.ppt")).toBe("ppt");
+    expect(getDocumentType("minutes.docx")).toBe("docx");
+    expect(getDocumentType("budget.xlsx")).toBe("xlsx");
     expect(getDocumentType("notes.txt")).toBeNull();
   });
 
-  it("accepts PDF, image, and presentation uploads only", () => {
+  it("accepts PDF, image, presentation, Word, and Excel uploads only", () => {
     expect(isAcceptedDocument("diagram.webp", "image/webp")).toBe(true);
     expect(isAcceptedDocument("briefing.pptx")).toBe(true);
+    expect(isAcceptedDocument("report.doc", "application/msword")).toBe(true);
+    expect(isAcceptedDocument("sheet.xlsx")).toBe(true);
     expect(isAcceptedDocument("archive.zip", "application/zip")).toBe(false);
   });
 
@@ -24,6 +28,9 @@ describe("phase 3 document validation", () => {
 
   it("keeps the required graceful PPT/PPTX fallback message stable", () => {
     expect(PPTX_FALLBACK_ERROR).toBe("PPT/PPTX conversion provider is not configured. Please upload PDF for immediate annotation.");
+    expect(OFFICE_FALLBACK_ERROR).toBe("Office document conversion provider is not configured. Please upload PDF for immediate annotation.");
+    expect(getOfficeConversionFallbackError("pptx")).toBe(PPTX_FALLBACK_ERROR);
+    expect(getOfficeConversionFallbackError("docx")).toBe(OFFICE_FALLBACK_ERROR);
   });
 
   it("validates upload metadata before persistence", () => {

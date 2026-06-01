@@ -14,6 +14,7 @@ import {
   LockOpen,
   LogOut,
   Maximize2,
+  Minimize2,
   MonitorUp,
   MousePointer2,
   PenLine,
@@ -45,7 +46,7 @@ import { REALTIME_EVENTS } from "@/lib/meetings/realtime-events";
 import { getMeetingLeaveDestination, hasSavableAnnotations } from "@/lib/meetings/workspace-safety";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils/cn";
-import { getDocumentType, PPTX_FALLBACK_ERROR, sanitizeFilename } from "@/lib/validation/documents";
+import { getDocumentType, getOfficeConversionFallbackError, isOfficeDocumentType, sanitizeFilename } from "@/lib/validation/documents";
 import type { AnnotationTool } from "@/lib/validation/annotations";
 import type { Annotation, DocumentPage, Meeting, MeetingDocument, MeetingParticipant, ParticipantPermission, Profile, ScreenShareSession } from "@/types/app";
 import type { Json } from "@/types/database";
@@ -245,6 +246,7 @@ export function MeetingWorkspace({
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const workspaceRootRef = useRef<HTMLDivElement>(null);
   const boardSectionRef = useRef<HTMLDivElement>(null);
   const boardScrollRef = useRef<HTMLDivElement>(null);
   const quickUploadInputRef = useRef<HTMLInputElement>(null);
@@ -270,6 +272,7 @@ export function MeetingWorkspace({
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [leavingMeeting, setLeavingMeeting] = useState(false);
   const [stageMode, setStageMode] = useState<MeetingStageMode>("board");
+  const [isWorkspaceFullscreen, setIsWorkspaceFullscreen] = useState(false);
   const [annotationSaveStatus, setAnnotationSaveStatus] = useState<AnnotationSaveStatus>("idle");
   const [lastAnnotationSavedAt, setLastAnnotationSavedAt] = useState<Date | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -288,6 +291,8 @@ export function MeetingWorkspace({
   const canAnnotate = canAnnotateInStage(canAnnotateByPermission, stageMode);
   const participantControlRows = participants.filter((participant) => participant.role_snapshot === "participant");
   const selectedDocumentHasAnnotations = hasSavableAnnotations(annotations, selectedDocumentId);
+  const isPresentationLive = screenShareSession?.status === "live";
+  const useCompactMeetingDock = isPresentationLive || isWorkspaceFullscreen;
 
   const onSizeChange = useCallback((size: BoardSize) => setBoard(size), []);
 
@@ -303,6 +308,33 @@ export function MeetingWorkspace({
   const focusScreenStage = useCallback(() => {
     setStageMode("screen");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const toggleWorkspaceFullscreen = useCallback(async () => {
+    const root = workspaceRootRef.current;
+    if (!root) return;
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      if (!root.requestFullscreen) {
+        setMessage({ type: "info", text: "Fullscreen is not supported by this browser. Use the browser full-screen option if available." });
+        return;
+      }
+
+      await root.requestFullscreen();
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Fullscreen could not be opened." });
+    }
+  }, []);
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsWorkspaceFullscreen(document.fullscreenElement === workspaceRootRef.current);
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
   }, []);
 
   const sendMeetingBroadcast = useCallback(
@@ -536,6 +568,7 @@ export function MeetingWorkspace({
   async function preparePages(file: File, documentType: MeetingDocument["document_type"]): Promise<PageDraft[]> {
     if (documentType === "pdf") return getPdfPageDrafts(file);
     if (documentType === "image") return [await getImagePageDraft(file)];
+    if (isOfficeDocumentType(documentType)) return [{ pageNumber: 1, width: 1200, height: 800 }];
     return [];
   }
 
@@ -585,13 +618,14 @@ export function MeetingWorkspace({
 
     try {
       const documentType = getDocumentType(file.name, file.type);
-      if (!documentType) throw new Error("Upload PDF, image, PPT, or PPTX files only.");
+      if (!documentType) throw new Error("Upload PDF, image, PowerPoint, Word, or Excel files only.");
 
       const documentId = crypto.randomUUID();
       const filename = sanitizeFilename(file.name);
       const storagePath = `${meeting.id}/${documentId}/original/${filename}`;
       const pageDrafts = await preparePages(file, documentType);
-      const conversionStatus = documentType === "ppt" || documentType === "pptx" ? "pending" : "ready";
+      const needsConversion = isOfficeDocumentType(documentType);
+      const conversionStatus = needsConversion ? "pending" : "ready";
 
       const upload = await supabase.storage.from("meeting-documents").upload(storagePath, file, {
         contentType: file.type || "application/octet-stream",
@@ -619,6 +653,7 @@ export function MeetingWorkspace({
         .single();
 
       if (documentError || !documentRow) throw documentError ?? new Error("Document metadata could not be created.");
+      let savedDocument = documentRow as MeetingDocument;
 
       let insertedPages: DocumentPage[] = [];
       if (pageDrafts.length > 0) {
@@ -639,33 +674,43 @@ export function MeetingWorkspace({
         insertedPages = (pageRows ?? []) as DocumentPage[];
       }
 
-      if (documentType === "ppt" || documentType === "pptx") {
-        const { error: conversionInvokeError } = await supabase.functions.invoke("pptx-convert", { body: { documentId } });
+      if (needsConversion) {
+        const fallbackError = getOfficeConversionFallbackError(documentType);
+        const { data: conversionResult, error: conversionInvokeError } = await supabase.functions.invoke<{ status?: string; message?: string }>("pptx-convert", { body: { documentId } });
         if (conversionInvokeError) {
           await supabase
             .from("meeting_documents")
-            .update({ conversion_status: "failed", conversion_error: PPTX_FALLBACK_ERROR })
+            .update({ conversion_status: "failed", conversion_error: fallbackError })
             .eq("id", documentId);
         }
+
+        const { data: refreshedDocument } = await supabase.from("meeting_documents").select("*").eq("id", documentId).maybeSingle();
+        savedDocument = (refreshedDocument as MeetingDocument | null) ?? {
+          ...savedDocument,
+          conversion_status: conversionInvokeError || conversionResult?.status === "failed" ? "failed" : savedDocument.conversion_status,
+          conversion_error: conversionInvokeError ? fallbackError : conversionResult?.message ?? savedDocument.conversion_error
+        };
       }
 
-      const nextDocuments = [documentRow as MeetingDocument, ...documents];
+      const nextDocuments = [savedDocument, ...documents];
       const nextPages = [...pages, ...insertedPages];
       setDocuments(nextDocuments);
       setPages(nextPages);
 
       const firstPage = insertedPages[0];
       if (firstPage) {
-        await selectDocumentPage(documentRow as MeetingDocument, firstPage, { silent: true });
+        await selectDocumentPage(savedDocument, firstPage, { silent: true });
       }
 
       await sendMeetingBroadcast(REALTIME_EVENTS.documentUploaded, { documentId, pageId: firstPage?.id ?? null });
 
       setMessage({
-        type: documentType === "ppt" || documentType === "pptx" ? "info" : "success",
+        type: needsConversion ? (savedDocument.conversion_status === "failed" ? "info" : "success") : "success",
         text:
-          documentType === "ppt" || documentType === "pptx"
-            ? "PPT/PPTX uploaded. Conversion status will show after the Edge Function runs."
+          needsConversion
+            ? savedDocument.conversion_status === "failed"
+              ? `${filename} is saved to the meeting. ${savedDocument.conversion_error ?? getOfficeConversionFallbackError(documentType)}`
+              : `${filename} is saved to the meeting and conversion has started.`
             : "Document uploaded and ready for annotation."
       });
       router.refresh();
@@ -1025,6 +1070,7 @@ export function MeetingWorkspace({
     }
 
     setScreenShareSession(data as ScreenShareSession);
+    setStageMode("screen");
     await sendMeetingBroadcast(REALTIME_EVENTS.screenStarted, { sessionId: data.id });
   }
 
@@ -1130,13 +1176,16 @@ export function MeetingWorkspace({
   const annotationStatusTone = annotationSaveStatus === "error" ? "danger" : annotationSaveStatus === "saved" ? "success" : annotationSaveStatus === "saving" ? "warning" : "neutral";
 
   return (
-    <div className="-mx-3 -mb-28 -mt-4 min-h-[calc(100svh-5rem)] space-y-4 rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.25),transparent_32%),linear-gradient(135deg,#020617,#111827_55%,#0f172a)] p-3 shadow-[0_32px_120px_-54px_rgba(15,23,42,0.9)] sm:-mx-5 sm:p-4 lg:-mx-8 lg:-mt-5 lg:p-5">
+    <div
+      ref={workspaceRootRef}
+      className="-mx-3 -mb-28 -mt-4 min-h-[calc(100svh-5rem)] space-y-4 overflow-auto rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.25),transparent_32%),linear-gradient(135deg,#020617,#111827_55%,#0f172a)] p-3 shadow-[0_32px_120px_-54px_rgba(15,23,42,0.9)] sm:-mx-5 sm:p-4 lg:-mx-8 lg:-mt-5 lg:p-5"
+    >
       <input
         ref={quickUploadInputRef}
         disabled={uploading || savingSnapshot}
         className="sr-only"
         type="file"
-        accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx"
+        accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx,.doc,.docx,.xls,.xlsx"
         onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
       />
 
@@ -1181,6 +1230,10 @@ export function MeetingWorkspace({
                 Screen
               </StageToggleButton>
             ) : null}
+            <StageToggleButton active={isWorkspaceFullscreen} onClick={toggleWorkspaceFullscreen}>
+              {isWorkspaceFullscreen ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
+              {isWorkspaceFullscreen ? "Exit full" : "Full screen"}
+            </StageToggleButton>
             {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
               <Button onClick={startWorkspace} disabled={isPending} size="sm" type="button" className="min-h-10 rounded-full bg-emerald-400 px-4 font-black text-emerald-950 hover:bg-emerald-300">
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
@@ -1303,7 +1356,7 @@ export function MeetingWorkspace({
                 <div className="max-w-md space-y-3">
                   <FileUp className="mx-auto h-10 w-10 text-primary" aria-hidden="true" />
                   <p className="text-xl font-black">No shared page selected</p>
-                  <p className="text-sm text-muted-foreground">Presenter uploads a PDF or image to open the annotation board. PPT/PPTX files are stored and routed through the conversion abstraction.</p>
+                  <p className="text-sm text-muted-foreground">Presenter uploads a PDF or image to open the annotation board. Office files are saved and routed through conversion before annotation.</p>
                 </div>
               </div>
             ) : (
@@ -1489,20 +1542,20 @@ export function MeetingWorkspace({
           <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
             <CardHeader>
               <CardTitle>Documents</CardTitle>
-              <CardDescription className="text-slate-300">PDF and images annotate immediately. PPT/PPTX is accepted with conversion fallback.</CardDescription>
+              <CardDescription className="text-slate-300">PDF and images annotate immediately. PowerPoint, Word, and Excel files are saved with conversion fallback.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {canUpload ? (
                 <div className="grid gap-3">
                   <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-300/35 bg-emerald-400/10 p-5 text-center text-sm font-black text-emerald-100">
                     {uploading || savingSnapshot ? <Loader2 className="mb-2 h-6 w-6 animate-spin" aria-hidden="true" /> : <FileUp className="mb-2 h-6 w-6" aria-hidden="true" />}
-                    Upload PDF, image, PPT, or PPTX
+                    Upload PDF, image, PowerPoint, Word, or Excel
                     {selectedDocumentHasAnnotations ? <span className="mt-1 text-xs font-medium text-slate-300">You will be asked to save the current annotations first.</span> : null}
                     <input
                       disabled={uploading || savingSnapshot}
                       className="sr-only"
                       type="file"
-                      accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx"
+                      accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx,.doc,.docx,.xls,.xlsx"
                       onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
                     />
                   </label>
@@ -1589,7 +1642,13 @@ export function MeetingWorkspace({
               onClick={focusScreenStage}
             />
           ) : null}
-          {selectedDocumentPages.length > 0 ? (
+          <MeetDockButton
+            active={isWorkspaceFullscreen}
+            icon={isWorkspaceFullscreen ? <Minimize2 className="h-5 w-5" aria-hidden="true" /> : <Maximize2 className="h-5 w-5" aria-hidden="true" />}
+            label={isWorkspaceFullscreen ? "Exit" : "Full"}
+            onClick={toggleWorkspaceFullscreen}
+          />
+          {!useCompactMeetingDock && selectedDocumentPages.length > 0 ? (
             <>
               <MeetDockButton
                 disabled={!canUsePresenterControls || selectedPageIndex <= 0}
@@ -1605,7 +1664,7 @@ export function MeetingWorkspace({
               />
             </>
           ) : null}
-          {canUsePresenterControls ? (
+          {canUsePresenterControls && !useCompactMeetingDock ? (
             <>
               <MeetDockButton
                 active={meeting.participant_annotation_enabled}
@@ -1631,16 +1690,16 @@ export function MeetingWorkspace({
                 label="Board+"
                 onClick={createWhiteboard}
               />
-              {meeting.status !== "completed" ? (
-                <MeetDockButton
-                  danger
-                  disabled={isPending || savingSnapshot}
-                  icon={<StopCircle className="h-5 w-5" aria-hidden="true" />}
-                  label="End"
-                  onClick={endMeeting}
-                />
-              ) : null}
             </>
+          ) : null}
+          {canUsePresenterControls && meeting.status !== "completed" ? (
+            <MeetDockButton
+              danger
+              disabled={isPending || savingSnapshot}
+              icon={<StopCircle className="h-5 w-5" aria-hidden="true" />}
+              label="End"
+              onClick={endMeeting}
+            />
           ) : null}
           {profile.role === "participant" ? (
             <MeetDockButton

@@ -5,7 +5,7 @@ export type Database = {
     Enums: {
       user_role: "admin" | "presenter" | "participant";
       meeting_status: "scheduled" | "live" | "paused" | "completed" | "cancelled";
-      document_type: "pdf" | "image" | "pptx" | "ppt";
+      document_type: "pdf" | "image" | "pptx" | "ppt" | "doc" | "docx" | "xls" | "xlsx";
       conversion_status: "pending" | "processing" | "ready" | "failed";
       annotation_type: "pen" | "highlighter" | "text" | "rectangle" | "circle" | "line" | "arrow" | "eraser";
       annotation_event_type: "created" | "updated" | "deleted" | "cleared";
