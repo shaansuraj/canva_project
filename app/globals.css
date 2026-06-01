@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 39% 96%;
+    --foreground: 206 47% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 206 47% 14%;
+    --primary: 190 72% 21%;
+    --primary-foreground: 42 39% 96%;
+    --secondary: 38 58% 88%;
+    --secondary-foreground: 206 47% 14%;
+    --muted: 38 28% 90%;
+    --muted-foreground: 205 18% 41%;
+    --accent: 15 80% 58%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 38 24% 82%;
+    --input: 38 24% 82%;
+    --ring: 190 72% 21%;
+    --radius: 1.1rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    @apply min-h-screen bg-background text-foreground antialiased;
+    font-family: "Plus Jakarta Sans", "Aptos", "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(244, 162, 97, 0.22), transparent 30rem),
+      radial-gradient(circle at 85% 12%, rgba(15, 76, 92, 0.18), transparent 24rem),
+      linear-gradient(135deg, hsl(var(--background)), #f8f1e6 45%, #edf6f6);
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}

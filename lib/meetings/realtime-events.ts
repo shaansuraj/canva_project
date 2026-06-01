@@ -1,0 +1,19 @@
+﻿export const REALTIME_EVENTS = {
+  meetingStatusChanged: "meeting.status.changed",
+  documentUploaded: "document.uploaded",
+  documentSelected: "document.selected",
+  pageChanged: "page.changed",
+  annotationCreated: "annotation.created",
+  annotationUpdated: "annotation.updated",
+  annotationDeleted: "annotation.deleted",
+  annotationsCleared: "annotations.cleared",
+  permissionsChanged: "permissions.changed",
+  documentLocked: "document.locked",
+  documentUnlocked: "document.unlocked",
+  screenStarted: "screen.started",
+  screenPaused: "screen.paused",
+  screenStopped: "screen.stopped",
+  exportReady: "export.ready",
+  exportFailed: "export.failed",
+  presenceUpdated: "presence.updated"
+} as const;
