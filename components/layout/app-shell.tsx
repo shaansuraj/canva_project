@@ -74,12 +74,12 @@ function BottomTab({
       onClick={onNavigate}
       className={cn(
         "relative flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black transition",
-        active ? "bg-primary text-primary-foreground shadow-soft" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+        active ? "bg-white text-slate-950 shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)]" : "text-slate-200 hover:bg-white/10 hover:text-white"
       )}
     >
       <NavIcon item={item} className="mb-1 h-5 w-5" />
       <span className="max-w-full truncate">{item.label}</span>
-      {active ? <span className="absolute -top-1 h-1.5 w-8 rounded-full bg-accent" /> : null}
+      {active ? <span className="absolute -top-1 h-1.5 w-8 rounded-full bg-emerald-400" /> : null}
     </Link>
   );
 }
@@ -134,7 +134,7 @@ function MoreSheet({
                   onClick={onClose}
                   className={cn(
                     "flex min-h-12 items-center gap-3 rounded-2xl px-4 text-sm font-black transition",
-                    active ? "bg-primary text-primary-foreground" : "bg-secondary/60 text-foreground hover:bg-secondary"
+                    active ? "bg-primary text-primary-foreground" : "bg-slate-100 text-slate-900 hover:bg-slate-200"
                   )}
                 >
                   <NavIcon item={item} className="h-5 w-5" />
@@ -192,7 +192,7 @@ export function AppShell({
       </header>
 
       <div className="mx-auto flex max-w-7xl gap-5 lg:py-4">
-        <aside className="sticky top-4 hidden h-[calc(100vh-2rem)] w-72 shrink-0 rounded-[2rem] border border-white/70 bg-white/75 p-4 shadow-soft backdrop-blur lg:block">
+        <aside className="sticky top-4 hidden h-[calc(100vh-2rem)] w-72 shrink-0 rounded-[2rem] border border-white/70 bg-white/88 p-4 shadow-soft backdrop-blur lg:block">
           <div className="flex h-full flex-col">
             <Link href="/dashboard" className="rounded-3xl bg-primary p-5 text-primary-foreground">
               <div className="flex items-center gap-3">
@@ -210,7 +210,15 @@ export function AppShell({
               {items.map((item) => {
                 const active = isNavItemActive(pathname, item);
                 return (
-                  <Button key={`${item.id}-${item.href}`} asChild className={cn("w-full justify-start rounded-2xl", active ? "bg-primary text-primary-foreground hover:bg-primary/90" : undefined)} variant={active ? "default" : "ghost"}>
+                  <Button
+                    key={`${item.id}-${item.href}`}
+                    asChild
+                    className={cn(
+                      "w-full justify-start rounded-2xl font-black",
+                      active ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-slate-800 hover:bg-secondary/80 hover:text-slate-950"
+                    )}
+                    variant={active ? "default" : "ghost"}
+                  >
                     <Link href={item.href}>
                       <NavIcon item={item} className="h-4 w-4" />
                       {item.label}
@@ -256,7 +264,7 @@ export function AppShell({
         </main>
       </div>
 
-      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-white/92 px-3 pt-2 shadow-[0_-18px_48px_-30px_rgba(15,23,42,0.55)] backdrop-blur-xl lg:hidden">
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/96 px-3 pt-2 text-white shadow-[0_-18px_58px_-28px_rgba(0,0,0,0.85)] backdrop-blur-2xl lg:hidden">
         <div className="mx-auto flex max-w-md items-center justify-around gap-1">
           {primaryMobileItems.map((item) => (
             <BottomTab key={`${item.id}-${item.href}`} item={item} pathname={pathname} />
@@ -264,7 +272,7 @@ export function AppShell({
           <button
             aria-label="Open more navigation options"
             onClick={() => setMenuOpen(true)}
-            className="flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            className="flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black text-slate-200 transition hover:bg-white/10 hover:text-white"
             type="button"
           >
             <Menu className="mb-1 h-5 w-5" aria-hidden="true" />

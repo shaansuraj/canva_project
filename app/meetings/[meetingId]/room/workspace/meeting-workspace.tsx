@@ -1,7 +1,9 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import {
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileText,
   FileUp,
@@ -137,6 +139,87 @@ function applyScrollRatio(container: HTMLDivElement, topRatio: number, leftRatio
     left: leftRatio * Math.max(0, container.scrollWidth - container.clientWidth),
     behavior: "smooth"
   });
+}
+
+function StagePill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "success" | "warning" | "danger" }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-7 items-center rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.08em]",
+        tone === "neutral" && "border-white/15 bg-white/12 text-white",
+        tone === "success" && "border-emerald-300/40 bg-emerald-400/18 text-emerald-50",
+        tone === "warning" && "border-amber-300/40 bg-amber-400/18 text-amber-50",
+        tone === "danger" && "border-rose-300/45 bg-rose-500/22 text-rose-50"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StageToggleButton({
+  active,
+  children,
+  onClick
+}: {
+  active?: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "inline-flex min-h-10 items-center gap-2 rounded-full border px-4 text-sm font-black transition",
+        active ? "border-white bg-white text-slate-950 shadow-lg shadow-black/20" : "border-white/15 bg-white/10 text-white hover:bg-white/18"
+      )}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+function MeetDockButton({
+  active,
+  danger,
+  disabled,
+  icon,
+  label,
+  onClick
+}: {
+  active?: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "group flex min-w-[4.75rem] shrink-0 flex-col items-center gap-1 rounded-3xl px-2 py-1.5 text-[0.7rem] font-black text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 disabled:cursor-not-allowed disabled:opacity-45",
+        !active && !danger && "hover:bg-white/8",
+        active && "text-slate-950",
+        danger && "text-rose-50 hover:bg-rose-500/10"
+      )}
+      disabled={disabled}
+      onClick={onClick}
+      type="button"
+    >
+      <span
+        className={cn(
+          "flex h-12 w-12 items-center justify-center rounded-full border text-white shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)] transition",
+          active && "border-white bg-white text-slate-950",
+          danger && "border-rose-300/35 bg-rose-500 text-white group-hover:bg-rose-400",
+          !active && !danger && "border-white/12 bg-white/12 group-hover:bg-white/20"
+        )}
+      >
+        {icon}
+      </span>
+      <span className="max-w-[4.75rem] truncate">{label}</span>
+    </button>
+  );
 }
 
 export function MeetingWorkspace({
@@ -1043,6 +1126,8 @@ export function MeetingWorkspace({
         : annotationSaveStatus === "error"
           ? "Save failed"
           : "Ready";
+  const meetingStatusTone = meeting.status === "live" ? "success" : meeting.status === "completed" || meeting.status === "cancelled" ? "danger" : "warning";
+  const annotationStatusTone = annotationSaveStatus === "error" ? "danger" : annotationSaveStatus === "saved" ? "success" : annotationSaveStatus === "saving" ? "warning" : "neutral";
 
   return (
     <div className="-mx-3 -mb-28 -mt-4 min-h-[calc(100svh-5rem)] space-y-4 rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.25),transparent_32%),linear-gradient(135deg,#020617,#111827_55%,#0f172a)] p-3 shadow-[0_32px_120px_-54px_rgba(15,23,42,0.9)] sm:-mx-5 sm:p-4 lg:-mx-8 lg:-mt-5 lg:p-5">
@@ -1076,9 +1161,9 @@ export function MeetingWorkspace({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Badge variant={meeting.status === "live" ? "success" : "secondary"}>{meeting.status}</Badge>
-              <Badge variant={annotationSaveStatus === "error" ? "outline" : annotationSaveStatus === "saved" ? "success" : "secondary"}>{annotationStatusText}</Badge>
-              <Badge variant={meeting.document_locked ? "outline" : "secondary"}>{meeting.document_locked ? "Board locked" : "Board open"}</Badge>
+              <StagePill tone={meetingStatusTone}>{meeting.status}</StagePill>
+              <StagePill tone={annotationStatusTone}>{annotationStatusText}</StagePill>
+              <StagePill tone={meeting.document_locked ? "danger" : "success"}>{meeting.document_locked ? "Board locked" : "Board open"}</StagePill>
             </div>
             <p className="truncate text-lg font-black sm:text-2xl">{getStageModeLabel(stageMode)}</p>
             <p className="truncate text-xs text-white/65 sm:text-sm">
@@ -1086,24 +1171,24 @@ export function MeetingWorkspace({
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
-            <Button onClick={focusBoardStage} size="sm" type="button" variant={boardIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
+            <StageToggleButton active={boardIsMainStage} onClick={focusBoardStage}>
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
-            </Button>
+            </StageToggleButton>
             {canUseScreenShare ? (
-              <Button onClick={focusScreenStage} size="sm" type="button" variant={screenIsMainStage ? "secondary" : "outline"} className="rounded-2xl">
+              <StageToggleButton active={screenIsMainStage} onClick={focusScreenStage}>
                 <MonitorUp className="h-4 w-4" aria-hidden="true" />
                 Screen
-              </Button>
+              </StageToggleButton>
             ) : null}
             {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
-              <Button onClick={startWorkspace} disabled={isPending} size="sm" type="button" className="rounded-2xl">
+              <Button onClick={startWorkspace} disabled={isPending} size="sm" type="button" className="min-h-10 rounded-full bg-emerald-400 px-4 font-black text-emerald-950 hover:bg-emerald-300">
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
                 Start
               </Button>
             ) : null}
             {profile.role === "participant" ? (
-              <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" variant="outline" className="rounded-2xl border-white/25 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+              <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" className="min-h-10 rounded-full bg-rose-500 px-4 font-black text-white hover:bg-rose-400">
                 {leavingMeeting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogOut className="h-4 w-4" aria-hidden="true" />}
                 Leave
               </Button>
@@ -1488,56 +1573,82 @@ export function MeetingWorkspace({
       </div>
 
       <div className="pointer-events-none fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+4.85rem)] z-30 xl:hidden">
-        <div className="pointer-events-auto mx-auto flex max-w-3xl items-center gap-2 overflow-x-auto rounded-[1.75rem] border border-white/70 bg-slate-950/92 p-2 text-white shadow-[0_24px_80px_-34px_rgba(15,23,42,0.85)] backdrop-blur-xl [scrollbar-width:none]">
-          <Button onClick={focusBoardStage} size="sm" type="button" variant={boardIsMainStage ? "secondary" : "ghost"} className="min-h-12 shrink-0 rounded-2xl">
-            <FileText className="h-4 w-4" aria-hidden="true" />
-            Board
-          </Button>
+        <div className="pointer-events-auto mx-auto flex max-w-3xl items-center gap-1 overflow-x-auto rounded-[2rem] border border-white/15 bg-slate-950/96 p-2 text-white shadow-[0_24px_90px_-34px_rgba(0,0,0,0.9)] backdrop-blur-2xl [scrollbar-width:none]">
+          <MeetDockButton
+            active={boardIsMainStage}
+            icon={<FileText className="h-5 w-5" aria-hidden="true" />}
+            label="Board"
+            onClick={focusBoardStage}
+          />
           {canUseScreenShare ? (
-            <Button onClick={focusScreenStage} size="sm" type="button" variant={screenIsMainStage ? "secondary" : "ghost"} className="min-h-12 shrink-0 rounded-2xl">
-              <MonitorUp className="h-4 w-4" aria-hidden="true" />
-              Screen
-            </Button>
+            <MeetDockButton
+              active={screenIsMainStage}
+              icon={<MonitorUp className="h-5 w-5" aria-hidden="true" />}
+              label="Screen"
+              onClick={focusScreenStage}
+            />
           ) : null}
           {selectedDocumentPages.length > 0 ? (
             <>
-              <Button disabled={!canUsePresenterControls || selectedPageIndex <= 0} onClick={() => changePage(selectedDocumentPages[selectedPageIndex - 1])} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                Prev
-              </Button>
-              <Button disabled={!canUsePresenterControls || selectedPageIndex < 0 || selectedPageIndex >= selectedDocumentPages.length - 1} onClick={() => changePage(selectedDocumentPages[selectedPageIndex + 1])} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                Next
-              </Button>
+              <MeetDockButton
+                disabled={!canUsePresenterControls || selectedPageIndex <= 0}
+                icon={<ChevronLeft className="h-5 w-5" aria-hidden="true" />}
+                label="Prev"
+                onClick={() => changePage(selectedDocumentPages[selectedPageIndex - 1])}
+              />
+              <MeetDockButton
+                disabled={!canUsePresenterControls || selectedPageIndex < 0 || selectedPageIndex >= selectedDocumentPages.length - 1}
+                icon={<ChevronRight className="h-5 w-5" aria-hidden="true" />}
+                label="Next"
+                onClick={() => changePage(selectedDocumentPages[selectedPageIndex + 1])}
+              />
             </>
           ) : null}
           {canUsePresenterControls ? (
             <>
-              <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                {meeting.participant_annotation_enabled ? "Annotate on" : "Annotate off"}
-              </Button>
-              <Button onClick={() => setDocumentLocked(!meeting.document_locked)} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                {meeting.document_locked ? "Unlock" : "Lock"}
-              </Button>
-              <Button onClick={() => quickUploadInputRef.current?.click()} disabled={uploading || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                <FileUp className="h-4 w-4" aria-hidden="true" />
-                Upload
-              </Button>
-              <Button onClick={createWhiteboard} disabled={uploading || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl">
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                Whiteboard
-              </Button>
+              <MeetDockButton
+                active={meeting.participant_annotation_enabled}
+                icon={<Highlighter className="h-5 w-5" aria-hidden="true" />}
+                label={meeting.participant_annotation_enabled ? "Annotate" : "Paused"}
+                onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)}
+              />
+              <MeetDockButton
+                danger={meeting.document_locked}
+                icon={meeting.document_locked ? <Lock className="h-5 w-5" aria-hidden="true" /> : <LockOpen className="h-5 w-5" aria-hidden="true" />}
+                label={meeting.document_locked ? "Locked" : "Open"}
+                onClick={() => setDocumentLocked(!meeting.document_locked)}
+              />
+              <MeetDockButton
+                disabled={uploading || savingSnapshot}
+                icon={<FileUp className="h-5 w-5" aria-hidden="true" />}
+                label="Upload"
+                onClick={() => quickUploadInputRef.current?.click()}
+              />
+              <MeetDockButton
+                disabled={uploading || savingSnapshot}
+                icon={<Plus className="h-5 w-5" aria-hidden="true" />}
+                label="Board+"
+                onClick={createWhiteboard}
+              />
               {meeting.status !== "completed" ? (
-                <Button onClick={endMeeting} disabled={isPending || savingSnapshot} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl text-red-100 hover:text-red-950">
-                  <StopCircle className="h-4 w-4" aria-hidden="true" />
-                  End
-                </Button>
+                <MeetDockButton
+                  danger
+                  disabled={isPending || savingSnapshot}
+                  icon={<StopCircle className="h-5 w-5" aria-hidden="true" />}
+                  label="End"
+                  onClick={endMeeting}
+                />
               ) : null}
             </>
           ) : null}
           {profile.role === "participant" ? (
-            <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" variant="ghost" className="min-h-12 shrink-0 rounded-2xl text-red-100 hover:text-red-950">
-              <LogOut className="h-4 w-4" aria-hidden="true" />
-              Leave
-            </Button>
+            <MeetDockButton
+              danger
+              disabled={leavingMeeting}
+              icon={<LogOut className="h-5 w-5" aria-hidden="true" />}
+              label="Leave"
+              onClick={leaveMeeting}
+            />
           ) : null}
         </div>
       </div>

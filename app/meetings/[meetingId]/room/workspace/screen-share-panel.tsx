@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { LiveKitRoom, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
 import { ConnectionState, Room, Track } from "livekit-client";
 import { FileText, Loader2, Maximize2, Minimize2, MonitorUp, PauseCircle, Square } from "lucide-react";
@@ -32,6 +32,21 @@ type PanelProps = {
   onPaused: () => Promise<void>;
   onStopped: () => Promise<void>;
 };
+
+function ScreenStatusPill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "success" | "warning" }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-7 items-center rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.08em]",
+        tone === "neutral" && "border-white/15 bg-white/12 text-white",
+        tone === "success" && "border-emerald-300/40 bg-emerald-400/18 text-emerald-50",
+        tone === "warning" && "border-amber-300/40 bg-amber-400/18 text-amber-50"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
 
 function ScreenShareStage({
   allowPresenterControls,
@@ -127,39 +142,39 @@ function ScreenShareStage({
         )}
       </div>
 
-      <div className={isCompact ? "flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/70 p-2 text-xs" : "flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-secondary/70 p-4 text-sm"}>
+      <div className={isCompact ? "flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-950 p-2 text-xs text-white" : "flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-slate-950 p-4 text-sm text-white"}>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={isConnected ? "success" : "secondary"}>{connectionState}</Badge>
-          <Badge variant={sessionStatus === "live" ? "success" : "outline"}>screen {sessionStatus}</Badge>
+          <ScreenStatusPill tone={isConnected ? "success" : "warning"}>{connectionState}</ScreenStatusPill>
+          <ScreenStatusPill tone={sessionStatus === "live" ? "success" : "neutral"}>screen {sessionStatus}</ScreenStatusPill>
         </div>
 
         {allowPresenterControls ? (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={onOpenBoard} size="sm" variant="outline">
+            <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
             </Button>
-            <Button disabled={!isConnected || busyAction !== null || isScreenShareEnabled} onClick={startShare} size="sm">
+            <Button disabled={!isConnected || busyAction !== null || isScreenShareEnabled} onClick={startShare} size="sm" className="bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300">
               {busyAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <MonitorUp className="h-4 w-4" aria-hidden="true" />}
               {sessionStatus === "paused" ? "Resume screen" : "Start screen"}
             </Button>
-            <Button disabled={!isConnected || busyAction !== null || !isScreenShareEnabled} onClick={pauseShare} size="sm" variant="outline">
+            <Button disabled={!isConnected || busyAction !== null || !isScreenShareEnabled} onClick={pauseShare} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
               {busyAction === "pause" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PauseCircle className="h-4 w-4" aria-hidden="true" />}
               Pause
             </Button>
-            <Button disabled={!isConnected || busyAction !== null || (!isScreenShareEnabled && sessionStatus === "stopped")} onClick={stopShare} size="sm" variant="outline">
+            <Button disabled={!isConnected || busyAction !== null || (!isScreenShareEnabled && sessionStatus === "stopped")} onClick={stopShare} size="sm" variant="outline" className="border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white">
               {busyAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />}
               Stop
             </Button>
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={onOpenBoard} size="sm" variant="outline">
+            <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
             </Button>
             {presentation === "floating" ? (
-              <Button onClick={onFocusScreen} size="sm">
+              <Button onClick={onFocusScreen} size="sm" className="bg-white text-slate-950 hover:bg-white/90">
                 <Maximize2 className="h-4 w-4" aria-hidden="true" />
                 Screen
               </Button>
