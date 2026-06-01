@@ -1,8 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useMemo, useState } from "react";
-import { Arrow, Ellipse, Layer, Line, Rect, Stage, Text } from "react-konva";
-import type Konva from "konva";
+import { useMemo, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import type { BoardSize } from "./document-renderer";
 import { serializePoints, type AnnotationTool, type PointPayload } from "@/lib/validation/annotations";
@@ -24,16 +22,30 @@ export type AnnotationCanvasProps = {
   onDelete: (annotation: Annotation) => Promise<void>;
 };
 
+function safeScale(value: number) {
+  return Math.max(value, 0.0001);
+}
+
+function sourceWidth(board: BoardSize) {
+  return board.width / safeScale(board.scaleX);
+}
+
+function sourceHeight(board: BoardSize) {
+  return board.height / safeScale(board.scaleY);
+}
+
 function scalePoint(point: PointPayload, board: BoardSize) {
   return { x: point.x * board.scaleX, y: point.y * board.scaleY };
 }
 
-function getPointer(stage: Konva.Stage, board: BoardSize) {
-  const pointer = stage.getPointerPosition();
-  if (!pointer) return null;
+function pointerToSourcePoint(event: ReactPointerEvent<SVGSVGElement>, board: BoardSize) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const displayX = ((event.clientX - rect.left) / safeScale(rect.width)) * board.width;
+  const displayY = ((event.clientY - rect.top) / safeScale(rect.height)) * board.height;
+
   return {
-    x: Math.max(0, Math.min(pointer.x / board.scaleX, board.width / board.scaleX)),
-    y: Math.max(0, Math.min(pointer.y / board.scaleY, board.height / board.scaleY))
+    x: Math.max(0, Math.min(displayX / safeScale(board.scaleX), sourceWidth(board))),
+    y: Math.max(0, Math.min(displayY / safeScale(board.scaleY), sourceHeight(board)))
   };
 }
 
@@ -47,25 +59,50 @@ function normalizeBox(start: PointPayload, end: PointPayload) {
   };
 }
 
-export function AnnotationCanvas({
-  annotations,
-  board,
-  tool,
-  color,
-  canAnnotate,
-  onCreate,
-  onDelete
-}: AnnotationCanvasProps) {
+function polylinePoints(points: PointPayload[], board: BoardSize) {
+  return points
+    .map((point) => scalePoint(point, board))
+    .map((point) => `${point.x},${point.y}`)
+    .join(" ");
+}
+
+function scaledStrokeWidth(payload: Record<string, unknown>, board: BoardSize, fallback = 3) {
+  return Number(payload.strokeWidth ?? fallback) * Math.max(board.scaleX, board.scaleY);
+}
+
+function getArrowHead(rawPoints: number[], board: BoardSize) {
+  const [x1, y1, x2, y2] = rawPoints;
+  const start = { x: x1 * board.scaleX, y: y1 * board.scaleY };
+  const end = { x: x2 * board.scaleX, y: y2 * board.scaleY };
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+  const size = 14;
+  const wing = Math.PI / 7;
+
+  return [
+    end,
+    { x: end.x - size * Math.cos(angle - wing), y: end.y - size * Math.sin(angle - wing) },
+    { x: end.x - size * Math.cos(angle + wing), y: end.y - size * Math.sin(angle + wing) }
+  ];
+}
+
+function arrowHeadPoints(rawPoints: number[], board: BoardSize) {
+  return getArrowHead(rawPoints, board)
+    .map((point) => `${point.x},${point.y}`)
+    .join(" ");
+}
+
+export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate, onCreate, onDelete }: AnnotationCanvasProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [startPoint, setStartPoint] = useState<PointPayload | null>(null);
+  const [activePointerId, setActivePointerId] = useState<number | null>(null);
   const drawableAnnotations = useMemo(() => annotations.filter((annotation) => !annotation.is_deleted), [annotations]);
+  const svgClassName = canAnnotate ? "block touch-none cursor-crosshair select-none" : "block cursor-not-allowed select-none";
 
-  function handleStart(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
+  function handleStart(event: ReactPointerEvent<SVGSVGElement>) {
     if (!canAnnotate) return;
-    const stage = event.target.getStage();
-    if (!stage) return;
-    const point = getPointer(stage, board);
-    if (!point) return;
+    event.preventDefault();
+
+    const point = pointerToSourcePoint(event, board);
 
     if (tool === "eraser") return;
 
@@ -77,6 +114,8 @@ export function AnnotationCanvas({
       return;
     }
 
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setActivePointerId(event.pointerId);
     setStartPoint(point);
 
     if (tool === "pen" || tool === "highlighter") {
@@ -100,12 +139,11 @@ export function AnnotationCanvas({
     setDraft({ type: tool, color, payload: { x: point.x, y: point.y, width: 0, height: 0, rotation: 0 } });
   }
 
-  function handleMove(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
-    if (!canAnnotate || !draft || !startPoint) return;
-    const stage = event.target.getStage();
-    if (!stage) return;
-    const point = getPointer(stage, board);
-    if (!point) return;
+  function handleMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!canAnnotate || !draft || !startPoint || activePointerId !== event.pointerId) return;
+    event.preventDefault();
+
+    const point = pointerToSourcePoint(event, board);
 
     if (draft.type === "pen" || draft.type === "highlighter") {
       const points = (draft.payload.points as PointPayload[]) ?? [];
@@ -121,58 +159,83 @@ export function AnnotationCanvas({
     setDraft({ ...draft, payload: normalizeBox(startPoint, point) });
   }
 
-  async function handleEnd() {
+  async function finishDraft() {
     if (!draft) return;
 
     const payload = draft.payload;
+    const draftType = draft.type;
+    const draftColor = draft.color;
     setDraft(null);
     setStartPoint(null);
+    setActivePointerId(null);
 
-    if ((draft.type === "pen" || draft.type === "highlighter") && Array.isArray(payload.points) && payload.points.length < 2) return;
-    if ((draft.type === "rectangle" || draft.type === "circle") && (Number(payload.width) < 4 || Number(payload.height) < 4)) return;
+    if ((draftType === "pen" || draftType === "highlighter") && Array.isArray(payload.points) && payload.points.length < 2) return;
+    if ((draftType === "rectangle" || draftType === "circle") && (Number(payload.width) < 4 || Number(payload.height) < 4)) return;
 
     const normalizedPayload =
-      draft.type === "pen" || draft.type === "highlighter"
+      draftType === "pen" || draftType === "highlighter"
         ? { ...payload, points: serializePoints(payload.points as PointPayload[]) }
         : payload;
 
-    await onCreate(draft.type, normalizedPayload, draft.color);
+    await onCreate(draftType, normalizedPayload, draftColor);
   }
 
-  function commonProps(annotation: Annotation) {
+  function handleEnd(event: ReactPointerEvent<SVGSVGElement>) {
+    if (activePointerId !== null && activePointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    void finishDraft();
+  }
+
+  function deleteWithEraser(annotation: Annotation) {
+    if (tool === "eraser" && canAnnotate) void onDelete(annotation);
+  }
+
+  function handleEraserKey(event: KeyboardEvent<SVGElement>, annotation: Annotation) {
+    if ((event.key === "Enter" || event.key === " ") && tool === "eraser" && canAnnotate) {
+      event.preventDefault();
+      void onDelete(annotation);
+    }
+  }
+
+  function erasableProps(annotation: Annotation, transient: boolean) {
+    const erasable = !transient && tool === "eraser" && canAnnotate;
+
     return {
-      onClick: () => {
-        if (tool === "eraser" && canAnnotate) void onDelete(annotation);
+      role: erasable ? "button" : undefined,
+      tabIndex: erasable ? 0 : undefined,
+      pointerEvents: erasable ? "visiblePainted" : "none",
+      onPointerDown: (event: ReactPointerEvent<SVGElement>) => {
+        if (!erasable) return;
+        event.preventDefault();
+        event.stopPropagation();
+        deleteWithEraser(annotation);
       },
-      onTap: () => {
-        if (tool === "eraser" && canAnnotate) void onDelete(annotation);
-      }
+      onKeyDown: (event: KeyboardEvent<SVGElement>) => handleEraserKey(event, annotation)
     };
   }
 
-  function renderAnnotation(annotation: Annotation, transient = false) {
+  function renderAnnotation(annotation: Annotation, transient = false): ReactNode {
     const payload = annotation.payload;
     const annotationColor = transient ? color : annotation.color;
     const key = transient ? "draft" : annotation.id;
+    const commonProps = erasableProps(annotation, transient);
 
     if (annotation.annotation_type === "pen" || annotation.annotation_type === "highlighter") {
-      const points = ((payload.points as PointPayload[]) ?? []).flatMap((point) => {
-        const scaled = scalePoint(point, board);
-        return [scaled.x, scaled.y];
-      });
+      const points = polylinePoints((payload.points as PointPayload[]) ?? [], board);
 
       return (
-        <Line
+        <polyline
           key={key}
           points={points}
+          fill="none"
           stroke={annotationColor}
-          strokeWidth={Number(payload.strokeWidth ?? 3) * Math.max(board.scaleX, board.scaleY)}
+          strokeWidth={scaledStrokeWidth(payload, board)}
           opacity={Number(payload.opacity ?? 1)}
-          lineCap="round"
-          lineJoin="round"
-          tension={0.35}
-          hitStrokeWidth={18}
-          {...commonProps(annotation)}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          {...commonProps}
         />
       );
     }
@@ -180,35 +243,41 @@ export function AnnotationCanvas({
     if (annotation.annotation_type === "text") {
       const point = scalePoint({ x: Number(payload.x ?? 0), y: Number(payload.y ?? 0) }, board);
       return (
-        <Text
+        <text
           key={key}
           x={point.x}
           y={point.y}
-          text={String(payload.text ?? "")}
-          fontSize={Number(payload.fontSize ?? 16) * board.scaleX}
           fill={annotationColor}
-          fontStyle="bold"
-          {...commonProps(annotation)}
-        />
+          fontSize={Number(payload.fontSize ?? 16) * board.scaleX}
+          fontWeight={800}
+          dominantBaseline="hanging"
+          {...commonProps}
+        >
+          {String(payload.text ?? "")}
+        </text>
       );
     }
 
     if (annotation.annotation_type === "line" || annotation.annotation_type === "arrow") {
       const rawPoints = (payload.points as number[]) ?? [0, 0, 0, 0];
-      const points = [rawPoints[0] * board.scaleX, rawPoints[1] * board.scaleY, rawPoints[2] * board.scaleX, rawPoints[3] * board.scaleY];
-      const Comp = annotation.annotation_type === "arrow" ? Arrow : Line;
+      const x1 = rawPoints[0] * board.scaleX;
+      const y1 = rawPoints[1] * board.scaleY;
+      const x2 = rawPoints[2] * board.scaleX;
+      const y2 = rawPoints[3] * board.scaleY;
+
       return (
-        <Comp
-          key={key}
-          points={points}
-          stroke={annotationColor}
-          fill={annotationColor}
-          strokeWidth={Number(payload.strokeWidth ?? 3) * Math.max(board.scaleX, board.scaleY)}
-          pointerLength={12}
-          pointerWidth={12}
-          hitStrokeWidth={18}
-          {...commonProps(annotation)}
-        />
+        <g key={key} {...commonProps}>
+          <line
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke={annotationColor}
+            strokeWidth={scaledStrokeWidth(payload, board)}
+            strokeLinecap="round"
+          />
+          {annotation.annotation_type === "arrow" ? <polygon points={arrowHeadPoints(rawPoints, board)} fill={annotationColor} /> : null}
+        </g>
       );
     }
 
@@ -216,25 +285,26 @@ export function AnnotationCanvas({
     const y = Number(payload.y ?? 0) * board.scaleY;
     const width = Number(payload.width ?? 0) * board.scaleX;
     const height = Number(payload.height ?? 0) * board.scaleY;
+    const erasableFill = tool === "eraser" && canAnnotate ? "rgba(255,255,255,0.001)" : "none";
 
     if (annotation.annotation_type === "circle") {
       return (
-        <Ellipse
+        <ellipse
           key={key}
-          x={x + width / 2}
-          y={y + height / 2}
-          radiusX={Math.abs(width / 2)}
-          radiusY={Math.abs(height / 2)}
+          cx={x + width / 2}
+          cy={y + height / 2}
+          rx={Math.abs(width / 2)}
+          ry={Math.abs(height / 2)}
           stroke={annotationColor}
           strokeWidth={3}
-          fill="transparent"
-          {...commonProps(annotation)}
+          fill={erasableFill}
+          {...commonProps}
         />
       );
     }
 
     return (
-      <Rect
+      <rect
         key={key}
         x={x}
         y={y}
@@ -242,8 +312,8 @@ export function AnnotationCanvas({
         height={height}
         stroke={annotationColor}
         strokeWidth={3}
-        fill="transparent"
-        {...commonProps(annotation)}
+        fill={erasableFill}
+        {...commonProps}
       />
     );
   }
@@ -269,22 +339,20 @@ export function AnnotationCanvas({
     : null;
 
   return (
-    <Stage
+    <svg
       width={board.width}
       height={board.height}
-      onMouseDown={handleStart}
-      onMouseMove={handleMove}
-      onMouseUp={() => void handleEnd()}
-      onTouchStart={handleStart}
-      onTouchMove={handleMove}
-      onTouchEnd={() => void handleEnd()}
-      className={canAnnotate ? "cursor-crosshair" : "cursor-not-allowed"}
+      viewBox={`0 0 ${board.width} ${board.height}`}
+      className={svgClassName}
+      aria-label="Annotation canvas"
+      onPointerDown={handleStart}
+      onPointerMove={handleMove}
+      onPointerUp={handleEnd}
+      onPointerCancel={handleEnd}
     >
-      <Layer>
-        {drawableAnnotations.map((annotation) => renderAnnotation(annotation))}
-        {draftAnnotation ? renderAnnotation(draftAnnotation, true) : null}
-        {!canAnnotate ? <Rect x={0} y={0} width={board.width} height={board.height} fill="rgba(255,255,255,0.02)" listening={false} /> : null}
-      </Layer>
-    </Stage>
+      {drawableAnnotations.map((annotation) => renderAnnotation(annotation))}
+      {draftAnnotation ? renderAnnotation(draftAnnotation, true) : null}
+      {!canAnnotate ? <rect x={0} y={0} width={board.width} height={board.height} fill="rgba(255,255,255,0.02)" pointerEvents="none" /> : null}
+    </svg>
   );
 }

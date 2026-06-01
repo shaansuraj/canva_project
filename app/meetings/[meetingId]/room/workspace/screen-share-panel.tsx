@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LiveKitRoom, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
-import { ConnectionState, Track } from "livekit-client";
+import { ConnectionState, Room, Track } from "livekit-client";
 import { Loader2, MonitorUp, PauseCircle, Square } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -138,10 +138,12 @@ function ScreenShareStage({
 
 export function ScreenSharePanel({ meetingId, allowPresenterControls, session, onStarted, onPaused, onStopped }: PanelProps) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const room = useMemo(() => new Room(), []);
   const liveKitUrl = getClientEnv().NEXT_PUBLIC_LIVEKIT_URL;
   const [tokenState, setTokenState] = useState<TokenResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const handleLiveKitError = useCallback((liveKitError: Error) => setError(liveKitError.message), []);
 
   useEffect(() => {
     let active = true;
@@ -205,11 +207,12 @@ export function ScreenSharePanel({ meetingId, allowPresenterControls, session, o
           <LiveKitRoom
             audio={false}
             connect={Boolean(tokenState?.token && liveKitUrl)}
+            room={room}
             serverUrl={liveKitUrl}
             token={tokenState?.token}
             video={false}
             screen={false}
-            onError={(liveKitError) => setError(liveKitError.message)}
+            onError={handleLiveKitError}
           >
             <ScreenShareStage allowPresenterControls={allowPresenterControls} session={session} onStarted={onStarted} onPaused={onPaused} onStopped={onStopped} />
           </LiveKitRoom>
