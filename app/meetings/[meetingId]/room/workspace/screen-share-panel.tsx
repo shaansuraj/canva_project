@@ -3,12 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useConnectionState, useLocalParticipant, useTracks } from "@livekit/components-react";
 import { ConnectionState, Room, Track } from "livekit-client";
-import { FileText, Loader2, Maximize2, Minimize2, MonitorUp, PauseCircle, Square } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, MonitorUp, PauseCircle, PlayCircle, Square } from "lucide-react";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getClientEnv } from "@/lib/env";
 import { getScreenShareErrorMessage, getScreenShareSupport, type ScreenShareSupport } from "@/lib/livekit/screen-share-support";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -19,6 +15,7 @@ type TokenResponse = {
   token: string;
   roomName: string;
   canPublishScreen: boolean;
+  error?: string;
 };
 
 type PanelProps = {
@@ -34,44 +31,93 @@ type PanelProps = {
   onStopped: () => Promise<void>;
 };
 
-function ScreenStatusPill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "success" | "warning" }) {
+function MiniDockButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
   return (
-    <span
-      className={cn(
-        "inline-flex min-h-7 items-center rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.08em]",
-        tone === "neutral" && "border-white/15 bg-white/12 text-white",
-        tone === "success" && "border-emerald-300/40 bg-emerald-400/18 text-emerald-50",
-        tone === "warning" && "border-amber-300/40 bg-amber-400/18 text-amber-50"
-      )}
+    <button
+      aria-label={`Open ${label}`}
+      className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-slate-950/92 px-3 text-xs font-black text-white shadow-[0_18px_60px_-28px_rgba(0,0,0,0.9)] backdrop-blur-2xl transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:right-4"
+      onClick={onClick}
+      type="button"
     >
-      {children}
-    </span>
+      {icon}
+      <span>{label}</span>
+    </button>
   );
+}
+
+function ScreenIconButton({
+  danger,
+  disabled,
+  icon,
+  label,
+  onClick
+}: {
+  danger?: boolean;
+  disabled?: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      className={cn(
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 disabled:cursor-not-allowed disabled:opacity-40",
+        danger ? "border-rose-300/35 bg-rose-500/90 hover:bg-rose-400" : "border-white/15 bg-slate-950/72 hover:bg-white hover:text-slate-950"
+      )}
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      {icon}
+    </button>
+  );
+}
+
+async function getFunctionErrorMessage(error: unknown, fallback: string) {
+  const response = (error as { context?: unknown } | null)?.context;
+  if (response instanceof Response) {
+    try {
+      const body = (await response.clone().json()) as { error?: unknown; message?: unknown };
+      if (typeof body.error === "string") return body.error;
+      if (typeof body.message === "string") return body.message;
+    } catch {
+      // Fall back to the SDK message below.
+    }
+  }
+
+  return error instanceof Error ? error.message : fallback;
 }
 
 function ScreenShareStage({
   allowPresenterControls,
   session,
-  minimized,
   presentation,
   screenShareSupport,
-  onOpenBoard,
   onFocusScreen,
+  onMinimize,
   onStarted,
   onPaused,
   onStopped
-}: Omit<PanelProps, "meetingId" | "onFocusBoard"> & { minimized: boolean; presentation: "floating" | "stage"; screenShareSupport: ScreenShareSupport }) {
+}: Omit<PanelProps, "meetingId" | "onFocusBoard" | "onOpenBoard"> & {
+  onMinimize: () => void;
+  presentation: "floating" | "stage";
+  screenShareSupport: ScreenShareSupport;
+}) {
   const tracks = useTracks([Track.Source.ScreenShare]);
   const firstScreenTrack = tracks[0];
-  const connectionState = useConnectionState();
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant();
+  const connectionState = useConnectionState();
   const [busyAction, setBusyAction] = useState<"start" | "pause" | "stop" | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
-  const isConnected = connectionState === ConnectionState.Connected;
   const sessionStatus = session?.status ?? "stopped";
   const isStage = presentation === "stage";
-  const isCompact = presentation === "floating" && minimized;
-  const controlsAreMinimized = isCompact && sessionStatus === "live";
+  const isFloating = presentation === "floating";
+  const isConnected = connectionState === ConnectionState.Connected;
+  const canStartShare = screenShareSupport.supported && isConnected && busyAction === null && !isScreenShareEnabled;
+  const canPauseShare = isConnected && busyAction === null && isScreenShareEnabled;
+  const canStopShare = isConnected && busyAction === null && (isScreenShareEnabled || sessionStatus !== "stopped");
 
   async function startShare() {
     if (!screenShareSupport.supported) {
@@ -123,88 +169,30 @@ function ScreenShareStage({
   }
 
   return (
-    <div className={isStage ? "relative flex h-full min-h-0 flex-col" : isCompact ? "space-y-2" : "space-y-3"}>
-      {controlError ? (
-        <Alert className="border-destructive/30 bg-destructive/5 text-destructive">
-          <AlertTitle>Screen share issue</AlertTitle>
-          <AlertDescription>{controlError}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {allowPresenterControls && !screenShareSupport.supported ? (
-        <Alert className="border-amber-300/30 bg-amber-400/10 text-amber-50">
-          <AlertTitle>{screenShareSupport.title}</AlertTitle>
-          <AlertDescription>{screenShareSupport.message}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      <div
-        className={cn(
-          "relative flex aspect-video items-center justify-center overflow-hidden border bg-slate-950 text-white shadow-soft",
-          isCompact && "h-24 min-h-24 rounded-lg border-white/15",
-          !isCompact && !isStage && "min-h-[220px] rounded-lg border-border",
-          isStage && "min-h-0 flex-1 rounded-none border-0"
-        )}
-      >
-        {firstScreenTrack ? (
-          <VideoTrack trackRef={firstScreenTrack} muted className="h-full w-full object-contain" />
-        ) : (
-          <div className={isCompact ? "max-w-xs p-3 text-center" : "max-w-sm p-6 text-center"}>
-            <MonitorUp className={isCompact ? "mx-auto mb-2 h-6 w-6 text-white/70" : "mx-auto mb-3 h-10 w-10 text-white/70"} aria-hidden="true" />
-            <p className={isCompact ? "text-xs font-black" : "font-black"}>Presenter screen will appear here</p>
-            {!isCompact ? <p className="mt-2 text-sm text-white/65">This room subscribes to presenter screen video and shared tab/system audio only. Microphone and camera tracks are never requested.</p> : null}
-          </div>
-        )}
-      </div>
-
-      <div className={cn(isCompact ? "flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-950 p-2 text-xs text-white" : "flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-950 p-3 text-sm text-white", isStage && "absolute inset-x-3 bottom-3 bg-slate-950/88 backdrop-blur-xl")}>
-        <div className="flex flex-wrap items-center gap-2">
-          <ScreenStatusPill tone={isConnected ? "success" : "warning"}>{connectionState}</ScreenStatusPill>
-          <ScreenStatusPill tone={sessionStatus === "live" ? "success" : "neutral"}>screen {sessionStatus}</ScreenStatusPill>
+    <div className="relative h-full w-full overflow-hidden bg-black text-white">
+      {firstScreenTrack ? (
+        <VideoTrack trackRef={firstScreenTrack} muted className="h-full w-full object-contain" />
+      ) : (
+        <div className="flex h-full min-h-28 items-center justify-center">
+          {busyAction ? <Loader2 className="h-6 w-6 animate-spin text-white/70" aria-hidden="true" /> : <MonitorUp className="h-8 w-8 text-white/55" aria-hidden="true" />}
+          {controlError ? <span className="sr-only">{controlError}</span> : null}
         </div>
+      )}
 
-        {controlsAreMinimized ? (
-          <p className="text-xs font-bold text-slate-300">Presentation is live. Expand the tile for controls.</p>
-        ) : allowPresenterControls ? (
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-            <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-              <FileText className="h-4 w-4" aria-hidden="true" />
-              Board
-            </Button>
-            <Button
-              disabled={!screenShareSupport.supported || !isConnected || busyAction !== null || isScreenShareEnabled}
-              onClick={startShare}
-              size="sm"
-              title={screenShareSupport.supported ? undefined : screenShareSupport.message}
-              className="bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300 disabled:bg-slate-700 disabled:text-slate-300"
-            >
-              {busyAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <MonitorUp className="h-4 w-4" aria-hidden="true" />}
-              {screenShareSupport.supported ? (sessionStatus === "paused" ? "Resume screen" : "Start screen") : "Desktop needed"}
-            </Button>
-            <Button disabled={!isConnected || busyAction !== null || !isScreenShareEnabled} onClick={pauseShare} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-              {busyAction === "pause" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PauseCircle className="h-4 w-4" aria-hidden="true" />}
-              Pause
-            </Button>
-            <Button disabled={!isConnected || busyAction !== null || (!isScreenShareEnabled && sessionStatus === "stopped")} onClick={stopShare} size="sm" variant="outline" className="border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white">
-              {busyAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />}
-              Stop
-            </Button>
-          </div>
-        ) : (
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-            <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-              <FileText className="h-4 w-4" aria-hidden="true" />
-              Board
-            </Button>
-            {presentation === "floating" ? (
-              <Button onClick={onFocusScreen} size="sm" className="bg-white text-slate-950 hover:bg-white/90">
-                <Maximize2 className="h-4 w-4" aria-hidden="true" />
-                Screen
-              </Button>
-            ) : null}
-          </div>
-        )}
-      </div>
+      {allowPresenterControls ? (
+        <div className={cn("absolute z-10 flex gap-1.5 rounded-full border border-white/10 bg-slate-950/70 p-1.5 backdrop-blur-xl", isStage ? "bottom-3 left-1/2 -translate-x-1/2" : "right-2 top-2")}>
+          <ScreenIconButton icon={<Maximize2 className="h-4 w-4" aria-hidden="true" />} label="Make screen share full screen" onClick={onFocusScreen} />
+          {isFloating ? <ScreenIconButton icon={<Minimize2 className="h-4 w-4" aria-hidden="true" />} label="Minimize live stream" onClick={onMinimize} /> : null}
+          <ScreenIconButton danger disabled={!canStopShare} icon={busyAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />} label="End screen share" onClick={stopShare} />
+          <ScreenIconButton disabled={!canPauseShare} icon={busyAction === "pause" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PauseCircle className="h-4 w-4" aria-hidden="true" />} label="Pause screen share" onClick={pauseShare} />
+          <ScreenIconButton disabled={!canStartShare} icon={busyAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />} label={sessionStatus === "paused" ? "Resume screen share" : "Start screen share"} onClick={startShare} />
+        </div>
+      ) : isFloating ? (
+        <div className="absolute right-2 top-2 z-10 flex gap-1.5 rounded-full border border-white/10 bg-slate-950/70 p-1.5 backdrop-blur-xl">
+          <ScreenIconButton icon={<Maximize2 className="h-4 w-4" aria-hidden="true" />} label="Make live stream full screen" onClick={onFocusScreen} />
+          <ScreenIconButton icon={<Minimize2 className="h-4 w-4" aria-hidden="true" />} label="Minimize live stream" onClick={onMinimize} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -214,9 +202,7 @@ export function ScreenSharePanel({
   allowPresenterControls,
   session,
   presentation = "floating",
-  onOpenBoard,
   onFocusScreen,
-  onFocusBoard,
   onStarted,
   onPaused,
   onStopped
@@ -233,8 +219,7 @@ export function ScreenSharePanel({
   );
   const handleLiveKitError = useCallback((liveKitError: Error) => setError(liveKitError.message), []);
   const isStage = presentation === "stage";
-  const isCompact = presentation === "floating" && minimized;
-  const openBoard = onFocusBoard ?? onOpenBoard;
+  const isFloating = presentation === "floating";
 
   useEffect(() => {
     if (presentation !== "floating" || session?.status !== "live") return;
@@ -268,8 +253,8 @@ export function ScreenSharePanel({
       });
 
       if (!active) return;
-      if (invokeError || !data) {
-        setError(invokeError?.message ?? "Could not create a LiveKit token.");
+      if (invokeError || !data?.token || data.error) {
+        setError(data?.error ?? (await getFunctionErrorMessage(invokeError, "Could not create a LiveKit token.")));
         setLoading(false);
         return;
       }
@@ -285,85 +270,55 @@ export function ScreenSharePanel({
     };
   }, [liveKitUrl, meetingId, supabase]);
 
+  const roomContent =
+    loading || error ? (
+      <div className="flex h-full min-h-28 items-center justify-center bg-black text-white">
+        {loading ? <Loader2 className="h-6 w-6 animate-spin text-white/70" aria-hidden="true" /> : <MonitorUp className="h-8 w-8 text-white/55" aria-hidden="true" />}
+        {error ? <span className="sr-only">{error}</span> : null}
+      </div>
+    ) : (
+      <LiveKitRoom
+        audio={false}
+        className="block h-full"
+        connect={Boolean(tokenState?.token && liveKitUrl)}
+        room={room}
+        serverUrl={liveKitUrl}
+        token={tokenState?.token}
+        video={false}
+        screen={false}
+        onError={handleLiveKitError}
+      >
+        <RoomAudioRenderer />
+        <ScreenShareStage
+          allowPresenterControls={allowPresenterControls}
+          presentation={presentation}
+          screenShareSupport={screenShareSupport}
+          onMinimize={() => setMinimized(true)}
+          onFocusScreen={onFocusScreen}
+          session={session}
+          onStarted={onStarted}
+          onPaused={onPaused}
+          onStopped={onStopped}
+        />
+      </LiveKitRoom>
+    );
+
   return (
-    <Card
-      className={cn(
-        "border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-30px_rgba(0,0,0,0.9)] backdrop-blur-xl",
-        isStage
-          ? "relative h-full overflow-hidden rounded-none border-0 bg-black"
-          : isCompact
-            ? "fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(44vw,15rem)] overflow-hidden rounded-lg sm:right-4 sm:w-64"
-            : "fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(calc(100vw-1.5rem),24rem)] overflow-hidden rounded-lg sm:right-4"
-      )}
-    >
-      <CardHeader className={isStage ? "absolute inset-x-0 top-0 z-10 border-b border-white/10 bg-slate-950/72 p-3 backdrop-blur-xl" : isCompact ? "p-2.5" : "p-4"}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle className={isCompact ? "flex items-center gap-2 text-base" : "flex items-center gap-2"}>
-              <MonitorUp className="h-5 w-5" aria-hidden="true" />
-              {isStage ? "Live screen" : isCompact ? "Screen" : "Screen share"}
-            </CardTitle>
-            {!isCompact ? <CardDescription className="text-slate-300">LiveKit carries presenter screen video plus shared tab/system audio. No microphone, camera, mute, or call controls are rendered.</CardDescription> : null}
-          </div>
-          <div className="flex items-center gap-2">
-            {!isCompact ? (allowPresenterControls ? <Badge variant="success">Presenter</Badge> : <Badge variant="secondary">Viewer</Badge>) : null}
-            {isStage ? null : (
-              <Button aria-label={minimized ? "Expand screen share tile" : "Minimize screen share tile"} onClick={() => setMinimized((current) => !current)} size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                {minimized ? <Maximize2 className="h-4 w-4" aria-hidden="true" /> : <Minimize2 className="h-4 w-4" aria-hidden="true" />}
-              </Button>
-            )}
-            {!isCompact && !isStage ? (
-              <Button aria-label="Make screen share the main stage" onClick={onFocusScreen} size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                <Maximize2 className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            ) : null}
-            {!isCompact ? (
-              <Button aria-label="Open annotation board" onClick={openBoard} size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                <FileText className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className={isStage ? "h-full p-0" : isCompact ? "p-2.5 pt-0" : "p-4 pt-0"}>
-        {loading ? (
-          <div className={isCompact ? "flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/[0.07] text-xs text-slate-300" : "flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-white/15 bg-white/[0.07] text-sm text-slate-300"}>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-            Connecting to screen share...
-          </div>
-        ) : error ? (
-          <Alert className="border-destructive/30 bg-destructive/5 text-destructive">
-            <AlertTitle>LiveKit unavailable</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : (
-          <LiveKitRoom
-            audio={false}
-            className={isStage ? "block h-full" : undefined}
-            connect={Boolean(tokenState?.token && liveKitUrl)}
-            room={room}
-            serverUrl={liveKitUrl}
-            token={tokenState?.token}
-            video={false}
-            screen={false}
-            onError={handleLiveKitError}
-          >
-            <RoomAudioRenderer />
-            <ScreenShareStage
-              allowPresenterControls={allowPresenterControls}
-              presentation={presentation}
-              minimized={minimized}
-              screenShareSupport={screenShareSupport}
-              onOpenBoard={openBoard}
-              onFocusScreen={onFocusScreen}
-              session={session}
-              onStarted={onStarted}
-              onPaused={onPaused}
-              onStopped={onStopped}
-            />
-          </LiveKitRoom>
+    <>
+      {isFloating && minimized ? (
+        <MiniDockButton icon={<MonitorUp className="h-4 w-4 text-emerald-300" aria-hidden="true" />} label="Live stream" onClick={() => setMinimized(false)} />
+      ) : null}
+      <div
+        className={cn(
+          "fixed z-40 overflow-hidden rounded-2xl border border-white/10 bg-black text-white shadow-[0_28px_90px_-30px_rgba(0,0,0,0.9)]",
+          isStage && "bottom-[calc(env(safe-area-inset-bottom)+5rem)] left-2 right-2 top-[calc(env(safe-area-inset-top)+4.5rem)] z-20 sm:bottom-[calc(env(safe-area-inset-bottom)+5.5rem)] sm:left-4 sm:right-4 sm:top-[calc(env(safe-area-inset-top)+5rem)]",
+          isFloating && !minimized && "right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] w-[min(56vw,20rem)] sm:right-4",
+          isFloating && minimized && "pointer-events-none h-px w-px opacity-0"
         )}
-      </CardContent>
-    </Card>
+        aria-hidden={isFloating && minimized}
+      >
+        <div className={cn("h-full w-full", isFloating && "aspect-video min-h-28")}>{roomContent}</div>
+      </div>
+    </>
   );
 }

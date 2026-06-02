@@ -40,15 +40,27 @@ function safeScale(value: number) {
 }
 
 function sourceWidth(board: BoardSize) {
-  return board.width / safeScale(board.scaleX);
+  return board.sourceWidth ?? board.width / safeScale(board.scaleX);
 }
 
 function sourceHeight(board: BoardSize) {
-  return board.height / safeScale(board.scaleY);
+  return board.sourceHeight ?? board.height / safeScale(board.scaleY);
+}
+
+function offsetX(board: BoardSize) {
+  return board.offsetX ?? 0;
+}
+
+function offsetY(board: BoardSize) {
+  return board.offsetY ?? 0;
+}
+
+function isInfiniteBoard(board: BoardSize) {
+  return board.infinite ?? false;
 }
 
 function scalePoint(point: PointPayload, board: BoardSize) {
-  return { x: point.x * board.scaleX, y: point.y * board.scaleY };
+  return { x: (point.x - offsetX(board)) * board.scaleX, y: (point.y - offsetY(board)) * board.scaleY };
 }
 
 function pointerToSourcePoint(event: ReactPointerEvent<SVGSVGElement>, board: BoardSize) {
@@ -56,9 +68,14 @@ function pointerToSourcePoint(event: ReactPointerEvent<SVGSVGElement>, board: Bo
   const displayX = ((event.clientX - rect.left) / safeScale(rect.width)) * board.width;
   const displayY = ((event.clientY - rect.top) / safeScale(rect.height)) * board.height;
 
+  const x = offsetX(board) + displayX / safeScale(board.scaleX);
+  const y = offsetY(board) + displayY / safeScale(board.scaleY);
+
+  if (isInfiniteBoard(board)) return { x, y };
+
   return {
-    x: Math.max(0, Math.min(displayX / safeScale(board.scaleX), sourceWidth(board))),
-    y: Math.max(0, Math.min(displayY / safeScale(board.scaleY), sourceHeight(board)))
+    x: Math.max(0, Math.min(x, sourceWidth(board))),
+    y: Math.max(0, Math.min(y, sourceHeight(board)))
   };
 }
 
@@ -85,8 +102,8 @@ function scaledStrokeWidth(payload: Record<string, unknown>, board: BoardSize, f
 
 function getArrowHead(rawPoints: number[], board: BoardSize) {
   const [x1, y1, x2, y2] = rawPoints;
-  const start = { x: x1 * board.scaleX, y: y1 * board.scaleY };
-  const end = { x: x2 * board.scaleX, y: y2 * board.scaleY };
+  const start = scalePoint({ x: x1, y: y1 }, board);
+  const end = scalePoint({ x: x2, y: y2 }, board);
   const angle = Math.atan2(end.y - start.y, end.x - start.x);
   const size = 14;
   const wing = Math.PI / 7;
@@ -298,18 +315,16 @@ export function AnnotationCanvas({ annotations, remoteDrafts = [], board, tool, 
 
     if (annotation.annotation_type === "line" || annotation.annotation_type === "arrow") {
       const rawPoints = (payload.points as number[]) ?? [0, 0, 0, 0];
-      const x1 = rawPoints[0] * board.scaleX;
-      const y1 = rawPoints[1] * board.scaleY;
-      const x2 = rawPoints[2] * board.scaleX;
-      const y2 = rawPoints[3] * board.scaleY;
+      const start = scalePoint({ x: rawPoints[0], y: rawPoints[1] }, board);
+      const end = scalePoint({ x: rawPoints[2], y: rawPoints[3] }, board);
 
       return (
         <g key={key} {...commonProps}>
           <line
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
+            x1={start.x}
+            y1={start.y}
+            x2={end.x}
+            y2={end.y}
             stroke={annotationColor}
             strokeWidth={scaledStrokeWidth(payload, board)}
             strokeLinecap="round"
@@ -319,8 +334,9 @@ export function AnnotationCanvas({ annotations, remoteDrafts = [], board, tool, 
       );
     }
 
-    const x = Number(payload.x ?? 0) * board.scaleX;
-    const y = Number(payload.y ?? 0) * board.scaleY;
+    const point = scalePoint({ x: Number(payload.x ?? 0), y: Number(payload.y ?? 0) }, board);
+    const x = point.x;
+    const y = point.y;
     const width = Number(payload.width ?? 0) * board.scaleX;
     const height = Number(payload.height ?? 0) * board.scaleY;
     const erasableFill = tool === "eraser" && canAnnotate ? "rgba(255,255,255,0.001)" : "none";

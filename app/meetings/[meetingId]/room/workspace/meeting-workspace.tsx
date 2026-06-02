@@ -21,6 +21,7 @@ import {
   Minus,
   MonitorUp,
   MoreHorizontal,
+  Move,
   Palette,
   PenLine,
   PlayCircle,
@@ -38,7 +39,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { endMeetingAction, startMeetingWorkspaceAction } from "../actions";
 import type { AnnotationCanvasProps, AnnotationDraftPreview } from "./annotation-canvas";
-import { type BoardSize, DocumentRenderer } from "./document-renderer";
+import { INFINITE_WHITEBOARD_HEIGHT, INFINITE_WHITEBOARD_WIDTH, type BoardSize, DocumentRenderer, type ViewportRequest, isGeneratedWhiteboardDocument } from "./document-renderer";
 import { ScreenSharePanel } from "./screen-share-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -99,8 +100,11 @@ function isRenderableDocument(document: MeetingDocument | null) {
 type BoardViewportPayload = {
   documentId: string | null;
   pageId: string | null;
-  topRatio: number;
-  leftRatio: number;
+  topRatio?: number;
+  leftRatio?: number;
+  viewportX?: number;
+  viewportY?: number;
+  viewportZoom?: number;
   sourceUserId: string;
 };
 
@@ -124,10 +128,14 @@ type MorePanel = "meeting" | "documents" | "people" | "annotations" | null;
 function createWhiteboardSvg(title: string) {
   return new Blob(
     [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-label="${title}">
-  <rect width="1600" height="1000" fill="#fffdf7"/>
-  <path d="M0 80H1600M0 160H1600M0 240H1600M0 320H1600M0 400H1600M0 480H1600M0 560H1600M0 640H1600M0 720H1600M0 800H1600M0 880H1600M0 960H1600" stroke="#e9e2d2" stroke-width="2"/>
-  <path d="M80 0V1000M160 0V1000M240 0V1000M320 0V1000M400 0V1000M480 0V1000M560 0V1000M640 0V1000M720 0V1000M800 0V1000M880 0V1000M960 0V1000M1040 0V1000M1120 0V1000M1200 0V1000M1280 0V1000M1360 0V1000M1440 0V1000M1520 0V1000" stroke="#f1eadc" stroke-width="2"/>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${INFINITE_WHITEBOARD_WIDTH}" height="${INFINITE_WHITEBOARD_HEIGHT}" viewBox="0 0 ${INFINITE_WHITEBOARD_WIDTH} ${INFINITE_WHITEBOARD_HEIGHT}" role="img" aria-label="${title}">
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0V80" fill="none" stroke="#e9e2d2" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <rect width="${INFINITE_WHITEBOARD_WIDTH}" height="${INFINITE_WHITEBOARD_HEIGHT}" fill="#fffdf7"/>
+  <rect width="${INFINITE_WHITEBOARD_WIDTH}" height="${INFINITE_WHITEBOARD_HEIGHT}" fill="url(#grid)" opacity="0.85"/>
 </svg>`
     ],
     { type: "image/svg+xml" }
@@ -253,6 +261,7 @@ export function MeetingWorkspace({
   const [color, setColor] = useState(profile.color ?? "#0f4c5c");
   const [board, setBoard] = useState<BoardSize>(defaultBoard);
   const [floatingBoard, setFloatingBoard] = useState<BoardSize>(defaultBoard);
+  const [floatingBoardMinimized, setFloatingBoardMinimized] = useState(true);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
   const [remoteDrafts, setRemoteDrafts] = useState<AnnotationDraftPreview[]>([]);
   const [morePanel, setMorePanel] = useState<MorePanel>(null);
@@ -264,10 +273,13 @@ export function MeetingWorkspace({
   const [isWorkspaceFullscreen, setIsWorkspaceFullscreen] = useState(false);
   const [annotationSaveStatus, setAnnotationSaveStatus] = useState<AnnotationSaveStatus>("idle");
   const [lastAnnotationSavedAt, setLastAnnotationSavedAt] = useState<Date | null>(null);
+  const [boardPanEnabled, setBoardPanEnabled] = useState(false);
+  const [boardViewportRequest, setBoardViewportRequest] = useState<ViewportRequest | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? null;
   const selectedPage = pages.find((page) => page.id === selectedPageId) ?? null;
+  const selectedDocumentIsWhiteboard = isGeneratedWhiteboardDocument(selectedDocument);
   const selectedDocumentPages = selectedDocument ? pages.filter((page) => page.document_id === selectedDocument.id).sort((a, b) => a.page_number - b.page_number) : [];
   const pageAnnotations = selectedPageId ? annotations.filter((annotation) => annotation.page_id === selectedPageId && !annotation.is_deleted) : [];
   const canUsePresenterControls = canUsePresenterConsoleControls({ profile, meeting, mode });
@@ -277,13 +289,19 @@ export function MeetingWorkspace({
   const boardIsMainStage = stageMode === "board";
   const screenIsMainStage = stageMode === "screen";
   const canAnnotateByPermission = Boolean(selectedDocument && selectedPage && isRenderableDocument(selectedDocument) && canCurrentUserAnnotate({ profile, meeting, permission: currentPermission }));
-  const canAnnotate = canAnnotateInStage(canAnnotateByPermission, stageMode);
+  const canAnnotate = canAnnotateInStage(canAnnotateByPermission, stageMode) && !(selectedDocumentIsWhiteboard && boardPanEnabled);
   const participantControlRows = participants.filter((participant) => participant.role_snapshot === "participant");
   const selectedDocumentHasAnnotations = hasSavableAnnotations(annotations, selectedDocumentId);
   const isPresentationLive = screenShareSession?.status === "live";
 
   const onSizeChange = useCallback((size: BoardSize) => setBoard(size), []);
   const onFloatingSizeChange = useCallback((size: BoardSize) => setFloatingBoard(size), []);
+
+  useEffect(() => {
+    if (selectedDocumentIsWhiteboard) return;
+    const timeout = window.setTimeout(() => setBoardPanEnabled(false), 0);
+    return () => window.clearTimeout(timeout);
+  }, [selectedDocumentIsWhiteboard]);
 
   const scrollToBoard = useCallback(() => {
     boardSectionRef.current?.focus({ preventScroll: true });
@@ -339,9 +357,17 @@ export function MeetingWorkspace({
     if (payload.pageId) setSelectedPageId(payload.pageId);
 
     suppressScrollBroadcastRef.current = true;
+    setBoardViewportRequest({
+      topRatio: payload.topRatio,
+      leftRatio: payload.leftRatio,
+      x: typeof payload.viewportX === "number" ? payload.viewportX : undefined,
+      y: typeof payload.viewportY === "number" ? payload.viewportY : undefined,
+      zoom: typeof payload.viewportZoom === "number" ? payload.viewportZoom : undefined,
+      nonce: Date.now()
+    });
     window.setTimeout(() => {
       const container = boardScrollRef.current;
-      if (container) applyScrollRatio(container, payload.topRatio, payload.leftRatio);
+      if (container && typeof payload.topRatio === "number" && typeof payload.leftRatio === "number") applyScrollRatio(container, payload.topRatio, payload.leftRatio);
       if (stageMode === "board") scrollToBoard();
       window.setTimeout(() => {
         suppressScrollBroadcastRef.current = false;
@@ -548,11 +574,12 @@ export function MeetingWorkspace({
         if (!canUsePresenterControls) scrollToBoard();
       })
       .on("broadcast", { event: REALTIME_EVENTS.boardViewportChanged }, ({ payload }) => {
+        const hasRatioViewport = typeof payload?.topRatio === "number" && typeof payload?.leftRatio === "number";
+        const hasAbsoluteViewport = typeof payload?.viewportX === "number" && typeof payload?.viewportY === "number";
         if (
           (payload?.documentId === null || typeof payload?.documentId === "string") &&
           (payload?.pageId === null || typeof payload?.pageId === "string") &&
-          typeof payload?.topRatio === "number" &&
-          typeof payload?.leftRatio === "number" &&
+          (hasRatioViewport || hasAbsoluteViewport) &&
           typeof payload?.sourceUserId === "string"
         ) {
           applyRemoteBoardViewport(payload as BoardViewportPayload);
@@ -866,8 +893,8 @@ export function MeetingWorkspace({
           document_id: documentId,
           meeting_id: meeting.id,
           page_number: 1,
-          width: 1600,
-          height: 1000
+          width: INFINITE_WHITEBOARD_WIDTH,
+          height: INFINITE_WHITEBOARD_HEIGHT
         })
         .select("*")
         .single();
@@ -1230,23 +1257,50 @@ export function MeetingWorkspace({
     await sendMeetingBroadcast(REALTIME_EVENTS.screenStopped, { sessionId: stoppedSessionId });
   }
 
-  function broadcastBoardViewport() {
-    const container = boardScrollRef.current;
-    if (!container || !canUsePresenterControls || suppressScrollBroadcastRef.current) return;
-
+  function canBroadcastBoardViewport() {
+    if (!canUsePresenterControls || suppressScrollBroadcastRef.current) return false;
     const now = Date.now();
-    if (now - lastScrollBroadcastRef.current < 260) return;
+    if (now - lastScrollBroadcastRef.current < 260) return false;
     lastScrollBroadcastRef.current = now;
+    return true;
+  }
 
-    const topRatio = getScrollRatio({ value: container.scrollTop, max: container.scrollHeight - container.clientHeight });
-    const leftRatio = getScrollRatio({ value: container.scrollLeft, max: container.scrollWidth - container.clientWidth });
-
+  function sendBoardViewport(payload: Omit<BoardViewportPayload, "documentId" | "pageId" | "sourceUserId">) {
     void sendMeetingBroadcast(REALTIME_EVENTS.boardViewportChanged, {
       documentId: selectedDocumentId,
       pageId: selectedPageId,
-      topRatio,
-      leftRatio,
+      ...payload,
       sourceUserId: profile.id
+    });
+  }
+
+  function broadcastBoardViewportFromSize(size: BoardSize) {
+    if (!canBroadcastBoardViewport()) return;
+
+    if (size.infinite) {
+      sendBoardViewport({
+        viewportX: size.offsetX ?? 0,
+        viewportY: size.offsetY ?? 0,
+        viewportZoom: size.scaleX
+      });
+      return;
+    }
+
+    const maxX = Math.max(0, (size.sourceWidth ?? size.width / Math.max(size.scaleX, 0.0001)) - size.width / Math.max(size.scaleX, 0.0001));
+    const maxY = Math.max(0, (size.sourceHeight ?? size.height / Math.max(size.scaleY, 0.0001)) - size.height / Math.max(size.scaleY, 0.0001));
+    sendBoardViewport({
+      topRatio: getScrollRatio({ value: size.offsetY ?? 0, max: maxY }),
+      leftRatio: getScrollRatio({ value: size.offsetX ?? 0, max: maxX })
+    });
+  }
+
+  function broadcastBoardViewport() {
+    const container = boardScrollRef.current;
+    if (!container || !canBroadcastBoardViewport()) return;
+
+    sendBoardViewport({
+      topRatio: getScrollRatio({ value: container.scrollTop, max: container.scrollHeight - container.clientHeight }),
+      leftRatio: getScrollRatio({ value: container.scrollLeft, max: container.scrollWidth - container.clientWidth })
     });
   }
 
@@ -1325,15 +1379,21 @@ export function MeetingWorkspace({
   const annotationStatusTone = annotationSaveStatus === "error" ? "danger" : annotationSaveStatus === "saved" ? "success" : annotationSaveStatus === "saving" ? "warning" : "neutral";
   const visibleRemoteDrafts = selectedPageId ? remoteDrafts.filter((draft) => draft.pageId === selectedPageId) : [];
   const shouldShowFloatingScreen = canUseScreenShare && boardIsMainStage && (canUsePresenterControls || isPresentationLive || screenShareSession?.status === "paused");
+  const shouldShowScreenPanel = canUseScreenShare && (screenIsMainStage || shouldShowFloatingScreen);
   const shouldShowFloatingBoard = screenIsMainStage;
-  const boardAvailabilityText = canAnnotate
-    ? "Annotation enabled"
-    : canAnnotateByPermission && !boardIsMainStage
-      ? "Board parked"
-      : meeting.document_locked
-        ? "Board locked"
-        : "Annotation unavailable";
+  const boardAvailabilityText =
+    selectedDocumentIsWhiteboard && boardPanEnabled
+      ? "Move board"
+      : canAnnotate
+        ? "Annotation enabled"
+        : canAnnotateByPermission && !boardIsMainStage
+          ? "Board parked"
+          : meeting.document_locked
+            ? "Board locked"
+            : "Annotation unavailable";
   const activeTool = tools.find((item) => item.id === tool) ?? tools[0];
+  const activeToolLabel = selectedDocumentIsWhiteboard && boardPanEnabled ? "Move" : activeTool.label;
+  const boardToolColumnCount = selectedDocumentIsWhiteboard ? tools.length + 2 : tools.length + 1;
 
   return (
     <div ref={workspaceRootRef} className="fixed inset-0 z-50 h-[100svh] w-screen overflow-hidden bg-slate-950 text-white">
@@ -1417,7 +1477,16 @@ export function MeetingWorkspace({
                 onScroll={broadcastBoardViewport}
                 className="h-full w-full overflow-hidden p-1 sm:p-2"
               >
-                <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange} frameClassName="border-white/80 shadow-[0_22px_70px_-38px_rgba(0,0,0,0.7)]">
+                <DocumentRenderer
+                  document={selectedDocument}
+                  page={selectedPage}
+                  signedUrl={signedUrl}
+                  onSizeChange={onSizeChange}
+                  onViewportChange={broadcastBoardViewportFromSize}
+                  panEnabled={selectedDocumentIsWhiteboard && boardPanEnabled}
+                  viewportRequest={boardViewportRequest}
+                  frameClassName="border-white/80 shadow-[0_22px_70px_-38px_rgba(0,0,0,0.7)]"
+                >
                   <AnnotationCanvas
                     annotations={pageAnnotations}
                     remoteDrafts={visibleRemoteDrafts}
@@ -1433,45 +1502,62 @@ export function MeetingWorkspace({
               </div>
             )}
             <div className="pointer-events-none absolute left-3 top-[calc(env(safe-area-inset-top)+4.65rem)] z-20 hidden rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-xs font-black text-white/80 backdrop-blur-xl sm:block">
-              {boardAvailabilityText} | {activeTool.label}
+              {boardAvailabilityText} | {activeToolLabel}
             </div>
           </section>
         ) : (
-          <section className="h-full min-h-0 overflow-hidden rounded-lg border border-white/10 bg-black shadow-[0_30px_90px_-48px_rgba(0,0,0,0.92)]">
-            {canUseScreenShare ? (
-              <ScreenSharePanel
-                allowPresenterControls={canUsePresenterControls}
-                meetingId={meeting.id}
-                onOpenBoard={focusBoardStage}
-                onFocusBoard={focusBoardStage}
-                onFocusScreen={focusScreenStage}
-                presentation="stage"
-                session={screenShareSession}
-                onStarted={markScreenShareStarted}
-                onPaused={markScreenSharePaused}
-                onStopped={markScreenShareStopped}
-              />
-            ) : null}
-          </section>
+          <section className="h-full min-h-0 overflow-hidden rounded-lg border border-white/10 bg-black shadow-[0_30px_90px_-48px_rgba(0,0,0,0.92)]" aria-label="Live screen stage" />
         )}
       </main>
 
+      {shouldShowScreenPanel ? (
+        <ScreenSharePanel
+          allowPresenterControls={canUsePresenterControls}
+          meetingId={meeting.id}
+          onOpenBoard={focusBoardStage}
+          onFocusBoard={focusBoardStage}
+          onFocusScreen={focusScreenStage}
+          presentation={screenIsMainStage ? "stage" : "floating"}
+          session={screenShareSession}
+          onStarted={markScreenShareStarted}
+          onPaused={markScreenSharePaused}
+          onStopped={markScreenShareStopped}
+        />
+      ) : null}
+
       {boardIsMainStage && selectedDocument && selectedPage ? (
         <div className="pointer-events-none absolute inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+4.9rem)] z-40 flex justify-center sm:bottom-[calc(env(safe-area-inset-bottom)+5.35rem)]">
-          <div className="pointer-events-auto grid w-full max-w-[25rem] grid-cols-9 gap-1 rounded-2xl border border-white/10 bg-slate-950/86 p-1.5 shadow-[0_22px_70px_-36px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
+          <div
+            className="pointer-events-auto grid w-full max-w-[min(calc(100vw-1rem),28rem)] gap-1 rounded-2xl border border-white/10 bg-slate-950/86 p-1.5 shadow-[0_22px_70px_-36px_rgba(0,0,0,0.9)] backdrop-blur-2xl"
+            style={{ gridTemplateColumns: `repeat(${boardToolColumnCount}, minmax(0, 1fr))` }}
+          >
+            {selectedDocumentIsWhiteboard ? (
+              <button
+                aria-label={boardPanEnabled ? "Disable whiteboard pan" : "Enable whiteboard pan"}
+                title={boardPanEnabled ? "Disable whiteboard pan" : "Enable whiteboard pan"}
+                className={cn("flex h-9 min-w-0 items-center justify-center rounded-xl border text-white transition", boardPanEnabled ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/10 hover:bg-white/18")}
+                onClick={() => setBoardPanEnabled((current) => !current)}
+                type="button"
+              >
+                <Move className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : null}
             {tools.map((item) => (
               <button
                 key={item.id}
                 aria-label={item.label}
                 title={item.label}
-                className={cn("flex h-10 min-w-0 items-center justify-center rounded-xl border text-white transition", tool === item.id ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/10 hover:bg-white/18")}
-                onClick={() => setTool(item.id)}
+                className={cn("flex h-9 min-w-0 items-center justify-center rounded-xl border text-white transition", !boardPanEnabled && tool === item.id ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/10 hover:bg-white/18")}
+                onClick={() => {
+                  setTool(item.id);
+                  setBoardPanEnabled(false);
+                }}
                 type="button"
               >
                 <item.icon className="h-4 w-4" aria-hidden="true" />
               </button>
             ))}
-            <label className="relative flex h-10 min-w-0 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10" title="Color">
+            <label className="relative flex h-9 min-w-0 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10" title="Color">
               <input aria-label="Annotation color" value={color} onChange={(event) => setColor(event.target.value)} type="color" className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
               <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/25" style={{ backgroundColor: color }}>
                 <Palette className="h-3.5 w-3.5 text-white drop-shadow" aria-hidden="true" />
@@ -1481,51 +1567,68 @@ export function MeetingWorkspace({
         </div>
       ) : null}
 
-      {shouldShowFloatingScreen ? (
-        <ScreenSharePanel
-          allowPresenterControls={canUsePresenterControls}
-          meetingId={meeting.id}
-          onOpenBoard={focusBoardStage}
-          onFocusBoard={focusBoardStage}
-          onFocusScreen={focusScreenStage}
-          presentation="floating"
-          session={screenShareSession}
-          onStarted={markScreenShareStarted}
-          onPaused={markScreenSharePaused}
-          onStopped={markScreenShareStopped}
-        />
-      ) : null}
-
       {shouldShowFloatingBoard ? (
-        <button
-          className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(42vw,13.5rem)] overflow-hidden rounded-lg border border-white/20 bg-slate-950/92 p-2 text-left text-white shadow-[0_24px_80px_-36px_rgba(0,0,0,0.9)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:bg-slate-900 sm:right-4 sm:w-60"
-          onClick={focusBoardStage}
-          type="button"
-        >
-          <span className="mb-2 flex items-center gap-2 text-xs font-black">
+        floatingBoardMinimized ? (
+          <button
+            aria-label="Open Annotation"
+            className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-slate-950/92 px-3 text-xs font-black text-white shadow-[0_18px_60px_-28px_rgba(0,0,0,0.9)] backdrop-blur-2xl transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:right-4"
+            onClick={() => setFloatingBoardMinimized(false)}
+            type="button"
+          >
             <FileText className="h-4 w-4 text-emerald-300" aria-hidden="true" />
-            Board
-          </span>
-          <span className="block h-24 overflow-hidden rounded-md bg-white/8 sm:h-32">
-            {selectedDocument && selectedPage ? (
-              <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onFloatingSizeChange} frameClassName="rounded-md border-white/60">
-                <AnnotationCanvas
-                  annotations={pageAnnotations}
-                  remoteDrafts={visibleRemoteDrafts}
-                  board={floatingBoard}
-                  tool={tool}
-                  color={color}
-                  canAnnotate={false}
-                  onCreate={async () => undefined}
-                  onDelete={async () => undefined}
-                />
-              </DocumentRenderer>
-            ) : (
-              <span className="flex h-full items-center justify-center text-xs text-white/55">No board</span>
-            )}
-          </span>
-          <span className="mt-2 block truncate text-[0.68rem] font-bold text-white/60">Read-only while floating</span>
-        </button>
+            <span>Annotation</span>
+          </button>
+        ) : (
+          <div className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(56vw,20rem)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/92 text-white shadow-[0_28px_90px_-30px_rgba(0,0,0,0.9)] backdrop-blur-2xl sm:right-4">
+            <div className="relative aspect-video min-h-28 overflow-hidden rounded-2xl bg-white/8">
+              {selectedDocument && selectedPage ? (
+                <DocumentRenderer
+                  document={selectedDocument}
+                  page={selectedPage}
+                  signedUrl={signedUrl}
+                  onSizeChange={onFloatingSizeChange}
+                  showWhiteboardControls={false}
+                  frameClassName="rounded-2xl border-white/40"
+                >
+                  <AnnotationCanvas
+                    annotations={pageAnnotations}
+                    remoteDrafts={visibleRemoteDrafts}
+                    board={floatingBoard}
+                    tool={tool}
+                    color={color}
+                    canAnnotate={false}
+                    onCreate={async () => undefined}
+                    onDelete={async () => undefined}
+                  />
+                </DocumentRenderer>
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <FileText className="h-8 w-8 text-white/45" aria-hidden="true" />
+                </div>
+              )}
+              <div className="absolute right-2 top-2 z-10 flex gap-1.5 rounded-full border border-white/10 bg-slate-950/70 p-1.5 backdrop-blur-xl">
+                <button
+                  aria-label="Make annotation board full screen"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-slate-950/72 text-white transition hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+                  onClick={focusBoardStage}
+                  title="Make annotation board full screen"
+                  type="button"
+                >
+                  <Maximize2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <button
+                  aria-label="Minimize annotation board"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-slate-950/72 text-white transition hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+                  onClick={() => setFloatingBoardMinimized(true)}
+                  title="Minimize annotation board"
+                  type="button"
+                >
+                  <Minimize2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )
       ) : null}
 
       <div className="pointer-events-none fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+0.45rem)] z-40">

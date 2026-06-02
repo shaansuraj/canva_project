@@ -102,7 +102,7 @@ Deno.serve(async (request) => {
     .maybeSingle();
 
   const isPresenterOwner = profile.role === "presenter" && meeting.presenter_id === user.id;
-  if (!membership) return jsonResponse({ error: "Meeting membership is required before joining LiveKit." }, 403);
+  if (!isPresenterOwner && !membership) return jsonResponse({ error: "Meeting membership is required before joining LiveKit." }, 403);
   if (profile.role === "admin" || (profile.role === "presenter" && !isPresenterOwner)) {
     return jsonResponse({ error: "LiveKit screen share is available only to the presenter owner and joined participants." }, 403);
   }
