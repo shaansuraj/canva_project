@@ -123,7 +123,7 @@ function ScreenShareStage({
   }
 
   return (
-    <div className={isCompact ? "space-y-3" : "space-y-4"}>
+    <div className={isStage ? "relative flex h-full min-h-0 flex-col" : isCompact ? "space-y-2" : "space-y-3"}>
       {controlError ? (
         <Alert className="border-destructive/30 bg-destructive/5 text-destructive">
           <AlertTitle>Screen share issue</AlertTitle>
@@ -141,9 +141,9 @@ function ScreenShareStage({
       <div
         className={cn(
           "relative flex aspect-video items-center justify-center overflow-hidden border bg-slate-950 text-white shadow-soft",
-          isCompact && "min-h-24 rounded-2xl border-white/15",
-          !isCompact && !isStage && "min-h-[220px] rounded-3xl border-border",
-          isStage && "min-h-[calc(100svh-18rem)] rounded-[2rem] border-white/15 sm:min-h-[58svh] lg:min-h-[62svh]"
+          isCompact && "h-24 min-h-24 rounded-lg border-white/15",
+          !isCompact && !isStage && "min-h-[220px] rounded-lg border-border",
+          isStage && "min-h-0 flex-1 rounded-none border-0"
         )}
       >
         {firstScreenTrack ? (
@@ -157,7 +157,7 @@ function ScreenShareStage({
         )}
       </div>
 
-      <div className={isCompact ? "flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-950 p-2 text-xs text-white" : "flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-slate-950 p-4 text-sm text-white"}>
+      <div className={cn(isCompact ? "flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-950 p-2 text-xs text-white" : "flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-950 p-3 text-sm text-white", isStage && "absolute inset-x-3 bottom-3 bg-slate-950/88 backdrop-blur-xl")}>
         <div className="flex flex-wrap items-center gap-2">
           <ScreenStatusPill tone={isConnected ? "success" : "warning"}>{connectionState}</ScreenStatusPill>
           <ScreenStatusPill tone={sessionStatus === "live" ? "success" : "neutral"}>screen {sessionStatus}</ScreenStatusPill>
@@ -166,7 +166,7 @@ function ScreenShareStage({
         {controlsAreMinimized ? (
           <p className="text-xs font-bold text-slate-300">Presentation is live. Expand the tile for controls.</p>
         ) : allowPresenterControls ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
             <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
@@ -191,7 +191,7 @@ function ScreenShareStage({
             </Button>
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
             <Button onClick={onOpenBoard} size="sm" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
               <FileText className="h-4 w-4" aria-hidden="true" />
               Board
@@ -290,18 +290,18 @@ export function ScreenSharePanel({
       className={cn(
         "border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-30px_rgba(0,0,0,0.9)] backdrop-blur-xl",
         isStage
-          ? "relative overflow-hidden rounded-[2rem]"
+          ? "relative h-full overflow-hidden rounded-none border-0 bg-black"
           : isCompact
-            ? "fixed bottom-[calc(env(safe-area-inset-bottom)+9.25rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),18rem)] xl:bottom-6 xl:right-6"
-            : "fixed bottom-[calc(env(safe-area-inset-bottom)+9.25rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),28rem)] xl:bottom-6 xl:right-6"
+            ? "fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(44vw,15rem)] overflow-hidden rounded-lg sm:right-4 sm:w-64"
+            : "fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(calc(100vw-1.5rem),24rem)] overflow-hidden rounded-lg sm:right-4"
       )}
     >
-      <CardHeader className={isCompact ? "p-3" : "p-4 sm:p-5"}>
+      <CardHeader className={isStage ? "absolute inset-x-0 top-0 z-10 border-b border-white/10 bg-slate-950/72 p-3 backdrop-blur-xl" : isCompact ? "p-2.5" : "p-4"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className={isCompact ? "flex items-center gap-2 text-base" : "flex items-center gap-2"}>
               <MonitorUp className="h-5 w-5" aria-hidden="true" />
-              {isStage ? "Live screen stage" : isCompact ? "Live screen" : "Screen share"}
+              {isStage ? "Live screen" : isCompact ? "Screen" : "Screen share"}
             </CardTitle>
             {!isCompact ? <CardDescription className="text-slate-300">LiveKit carries presenter screen video plus shared tab/system audio. No microphone, camera, mute, or call controls are rendered.</CardDescription> : null}
           </div>
@@ -325,7 +325,7 @@ export function ScreenSharePanel({
           </div>
         </div>
       </CardHeader>
-      <CardContent className={isCompact ? "p-3 pt-0" : "p-4 pt-0 sm:p-5 sm:pt-0"}>
+      <CardContent className={isStage ? "h-full p-0" : isCompact ? "p-2.5 pt-0" : "p-4 pt-0"}>
         {loading ? (
           <div className={isCompact ? "flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/[0.07] text-xs text-slate-300" : "flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-white/15 bg-white/[0.07] text-sm text-slate-300"}>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
@@ -339,6 +339,7 @@ export function ScreenSharePanel({
         ) : (
           <LiveKitRoom
             audio={false}
+            className={isStage ? "block h-full" : undefined}
             connect={Boolean(tokenState?.token && liveKitUrl)}
             room={room}
             serverUrl={liveKitUrl}

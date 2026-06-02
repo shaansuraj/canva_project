@@ -74,7 +74,7 @@ function BottomTab({
       onClick={onNavigate}
       className={cn(
         "relative flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black transition",
-        active ? "bg-white text-slate-950 shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)]" : "text-slate-200 hover:bg-white/10 hover:text-white"
+        active ? "bg-white text-slate-950 shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)]" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
       )}
     >
       <NavIcon item={item} className="mb-1 h-5 w-5" />
@@ -264,7 +264,7 @@ export function AppShell({
         </main>
       </div>
 
-      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/96 px-3 pt-2 text-white shadow-[0_-18px_58px_-28px_rgba(0,0,0,0.85)] backdrop-blur-2xl lg:hidden">
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/80 bg-white/94 px-3 pt-2 text-slate-700 shadow-[0_-18px_58px_-34px_rgba(15,23,42,0.42)] backdrop-blur-2xl lg:hidden">
         <div className="mx-auto flex max-w-md items-center justify-around gap-1">
           {primaryMobileItems.map((item) => (
             <BottomTab key={`${item.id}-${item.href}`} item={item} pathname={pathname} />
@@ -272,7 +272,7 @@ export function AppShell({
           <button
             aria-label="Open more navigation options"
             onClick={() => setMenuOpen(true)}
-            className="flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black text-slate-200 transition hover:bg-white/10 hover:text-white"
+            className="flex min-h-[3.65rem] flex-1 flex-col items-center justify-center rounded-[1.35rem] px-2 text-[0.68rem] font-black text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
             type="button"
           >
             <Menu className="mb-1 h-5 w-5" aria-hidden="true" />

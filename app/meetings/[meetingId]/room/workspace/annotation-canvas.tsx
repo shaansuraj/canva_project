@@ -1,25 +1,38 @@
 "use client";
 
-import { useMemo, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import type { BoardSize } from "./document-renderer";
 import { serializePoints, type AnnotationTool, type PointPayload } from "@/lib/validation/annotations";
 import type { Annotation } from "@/types/app";
 
 type Draft = {
+  id: string;
   type: AnnotationTool;
   color: string;
   payload: Record<string, unknown>;
 };
 
+export type AnnotationDraftPreview = {
+  id: string;
+  sourceUserId: string;
+  pageId: string;
+  type: AnnotationTool;
+  color: string;
+  payload: Record<string, unknown>;
+  updatedAt: string;
+};
+
 export type AnnotationCanvasProps = {
   annotations: Annotation[];
+  remoteDrafts?: AnnotationDraftPreview[];
   board: BoardSize;
   tool: AnnotationTool;
   color: string;
   canAnnotate: boolean;
   onCreate: (type: AnnotationTool, payload: Record<string, unknown>, color: string) => Promise<void>;
   onDelete: (annotation: Annotation) => Promise<void>;
+  onDraftChange?: (draft: Omit<AnnotationDraftPreview, "sourceUserId" | "pageId" | "updatedAt"> | null) => void;
 };
 
 function safeScale(value: number) {
@@ -91,18 +104,40 @@ function arrowHeadPoints(rawPoints: number[], board: BoardSize) {
     .join(" ");
 }
 
-export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate, onCreate, onDelete }: AnnotationCanvasProps) {
+function createDraftId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function AnnotationCanvas({ annotations, remoteDrafts = [], board, tool, color, canAnnotate, onCreate, onDelete, onDraftChange }: AnnotationCanvasProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [startPoint, setStartPoint] = useState<PointPayload | null>(null);
   const [activePointerId, setActivePointerId] = useState<number | null>(null);
+  const draftRef = useRef<Draft | null>(null);
   const drawableAnnotations = useMemo(() => annotations.filter((annotation) => !annotation.is_deleted), [annotations]);
-  const svgClassName = canAnnotate ? "block touch-none cursor-crosshair select-none" : "block cursor-not-allowed select-none";
+  const svgClassName = canAnnotate ? "block touch-none cursor-crosshair select-none" : "block touch-none cursor-default select-none";
+
+  function setActiveDraft(nextDraft: Draft | null) {
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    onDraftChange?.(
+      nextDraft
+        ? {
+            id: nextDraft.id,
+            type: nextDraft.type,
+            color: nextDraft.color,
+            payload: nextDraft.payload
+          }
+        : null
+    );
+  }
 
   function handleStart(event: ReactPointerEvent<SVGSVGElement>) {
     if (!canAnnotate) return;
     event.preventDefault();
 
     const point = pointerToSourcePoint(event, board);
+    const id = createDraftId();
 
     if (tool === "eraser") return;
 
@@ -119,7 +154,8 @@ export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate,
     setStartPoint(point);
 
     if (tool === "pen" || tool === "highlighter") {
-      setDraft({
+      setActiveDraft({
+        id,
         type: tool,
         color,
         payload: {
@@ -132,40 +168,42 @@ export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate,
     }
 
     if (tool === "line" || tool === "arrow") {
-      setDraft({ type: tool, color, payload: { points: [point.x, point.y, point.x, point.y], strokeWidth: 3 } });
+      setActiveDraft({ id, type: tool, color, payload: { points: [point.x, point.y, point.x, point.y], strokeWidth: 3 } });
       return;
     }
 
-    setDraft({ type: tool, color, payload: { x: point.x, y: point.y, width: 0, height: 0, rotation: 0 } });
+    setActiveDraft({ id, type: tool, color, payload: { x: point.x, y: point.y, width: 0, height: 0, rotation: 0 } });
   }
 
   function handleMove(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!canAnnotate || !draft || !startPoint || activePointerId !== event.pointerId) return;
+    const currentDraft = draftRef.current ?? draft;
+    if (!canAnnotate || !currentDraft || !startPoint || activePointerId !== event.pointerId) return;
     event.preventDefault();
 
     const point = pointerToSourcePoint(event, board);
 
-    if (draft.type === "pen" || draft.type === "highlighter") {
-      const points = (draft.payload.points as PointPayload[]) ?? [];
-      setDraft({ ...draft, payload: { ...draft.payload, points: [...points, point] } });
+    if (currentDraft.type === "pen" || currentDraft.type === "highlighter") {
+      const points = (currentDraft.payload.points as PointPayload[]) ?? [];
+      setActiveDraft({ ...currentDraft, payload: { ...currentDraft.payload, points: [...points, point] } });
       return;
     }
 
-    if (draft.type === "line" || draft.type === "arrow") {
-      setDraft({ ...draft, payload: { ...draft.payload, points: [startPoint.x, startPoint.y, point.x, point.y] } });
+    if (currentDraft.type === "line" || currentDraft.type === "arrow") {
+      setActiveDraft({ ...currentDraft, payload: { ...currentDraft.payload, points: [startPoint.x, startPoint.y, point.x, point.y] } });
       return;
     }
 
-    setDraft({ ...draft, payload: normalizeBox(startPoint, point) });
+    setActiveDraft({ ...currentDraft, payload: normalizeBox(startPoint, point) });
   }
 
   async function finishDraft() {
-    if (!draft) return;
+    const currentDraft = draftRef.current ?? draft;
+    if (!currentDraft) return;
 
-    const payload = draft.payload;
-    const draftType = draft.type;
-    const draftColor = draft.color;
-    setDraft(null);
+    const payload = currentDraft.payload;
+    const draftType = currentDraft.type;
+    const draftColor = currentDraft.color;
+    setActiveDraft(null);
     setStartPoint(null);
     setActivePointerId(null);
 
@@ -218,8 +256,8 @@ export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate,
 
   function renderAnnotation(annotation: Annotation, transient = false): ReactNode {
     const payload = annotation.payload;
-    const annotationColor = transient ? color : annotation.color;
-    const key = transient ? "draft" : annotation.id;
+    const annotationColor = annotation.color;
+    const key = annotation.id;
     const commonProps = erasableProps(annotation, transient);
 
     if (annotation.annotation_type === "pen" || annotation.annotation_type === "highlighter") {
@@ -318,25 +356,46 @@ export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate,
     );
   }
 
-  const draftAnnotation: Annotation | null = draft
-    ? {
-        id: "draft",
-        meeting_id: "draft",
-        document_id: "draft",
-        page_id: "draft",
-        user_id: null,
-        user_name_snapshot: "draft",
-        designation_snapshot: null,
-        role_snapshot: "participant",
-        annotation_type: draft.type,
-        color: draft.color,
-        payload: draft.payload,
-        version: 1,
-        is_deleted: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }
-    : null;
+  const draftAnnotations: Annotation[] = [
+    ...(draft
+      ? [
+          {
+            id: draft.id,
+            meeting_id: "draft",
+            document_id: "draft",
+            page_id: "draft",
+            user_id: null,
+            user_name_snapshot: "draft",
+            designation_snapshot: null,
+            role_snapshot: "participant" as const,
+            annotation_type: draft.type,
+            color: draft.color,
+            payload: draft.payload,
+            version: 1,
+            is_deleted: false,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+        ]
+      : []),
+    ...remoteDrafts.map((remoteDraft) => ({
+      id: remoteDraft.id,
+      meeting_id: "draft",
+      document_id: "draft",
+      page_id: remoteDraft.pageId,
+      user_id: remoteDraft.sourceUserId,
+      user_name_snapshot: "remote draft",
+      designation_snapshot: null,
+      role_snapshot: "participant" as const,
+      annotation_type: remoteDraft.type,
+      color: remoteDraft.color,
+      payload: remoteDraft.payload,
+      version: 1,
+      is_deleted: false,
+      created_at: remoteDraft.updatedAt,
+      updated_at: remoteDraft.updatedAt
+    }))
+  ];
 
   return (
     <svg
@@ -349,9 +408,10 @@ export function AnnotationCanvas({ annotations, board, tool, color, canAnnotate,
       onPointerMove={handleMove}
       onPointerUp={handleEnd}
       onPointerCancel={handleEnd}
+      style={{ touchAction: "none" }}
     >
       {drawableAnnotations.map((annotation) => renderAnnotation(annotation))}
-      {draftAnnotation ? renderAnnotation(draftAnnotation, true) : null}
+      {draftAnnotations.map((annotation) => renderAnnotation(annotation, true))}
       {!canAnnotate ? <rect x={0} y={0} width={board.width} height={board.height} fill="rgba(255,255,255,0.02)" pointerEvents="none" /> : null}
     </svg>
   );

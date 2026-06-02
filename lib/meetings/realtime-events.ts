@@ -7,6 +7,7 @@
   pageChanged: "page.changed",
   boardViewportChanged: "board.viewport.changed",
   annotationCreated: "annotation.created",
+  annotationDraftChanged: "annotation.draft.changed",
   annotationUpdated: "annotation.updated",
   annotationDeleted: "annotation.deleted",
   annotationsCleared: "annotations.cleared",

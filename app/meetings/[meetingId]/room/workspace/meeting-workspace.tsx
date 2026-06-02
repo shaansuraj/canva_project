@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import {
+  ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Circle,
   Download,
+  Eraser,
   FileText,
   FileUp,
   Highlighter,
@@ -15,8 +18,10 @@ import {
   LogOut,
   Maximize2,
   Minimize2,
+  Minus,
   MonitorUp,
-  MousePointer2,
+  MoreHorizontal,
+  Palette,
   PenLine,
   PlayCircle,
   Plus,
@@ -25,20 +30,19 @@ import {
   StopCircle,
   Trash2,
   Type,
-  UsersRound
+  X
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { endMeetingAction, startMeetingWorkspaceAction } from "../actions";
-import type { AnnotationCanvasProps } from "./annotation-canvas";
+import type { AnnotationCanvasProps, AnnotationDraftPreview } from "./annotation-canvas";
 import { type BoardSize, DocumentRenderer } from "./document-renderer";
 import { ScreenSharePanel } from "./screen-share-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getImagePageDraft, getPdfPageDrafts, type PageDraft } from "@/lib/documents/page-drafts";
 import { canConnectToScreenShare, canUsePresenterConsoleControls, createScreenShareRoomName, type WorkspaceMode } from "@/lib/livekit/permissions";
 import { canAnnotateInStage, getStageModeLabel, type MeetingStageMode } from "@/lib/meetings/meeting-stage";
@@ -61,10 +65,10 @@ const tools: Array<{ id: AnnotationTool; label: string; icon: React.ComponentTyp
   { id: "highlighter", label: "Highlighter", icon: Highlighter },
   { id: "text", label: "Text", icon: Type },
   { id: "rectangle", label: "Rect", icon: RectangleHorizontal },
-  { id: "circle", label: "Circle", icon: MousePointer2 },
-  { id: "line", label: "Line", icon: MousePointer2 },
-  { id: "arrow", label: "Arrow", icon: MousePointer2 },
-  { id: "eraser", label: "Erase", icon: MousePointer2 }
+  { id: "circle", label: "Circle", icon: Circle },
+  { id: "line", label: "Line", icon: Minus },
+  { id: "arrow", label: "Arrow", icon: ArrowUpRight },
+  { id: "eraser", label: "Erase", icon: Eraser }
 ];
 
 const defaultBoard: BoardSize = { width: 900, height: 600, scaleX: 1, scaleY: 1 };
@@ -115,6 +119,7 @@ type WorkspaceAnnotationsResult = {
 };
 
 type AnnotationSaveStatus = "idle" | "saving" | "saved" | "error";
+type MorePanel = "meeting" | "documents" | "people" | "annotations" | null;
 
 function createWhiteboardSvg(title: string) {
   return new Blob(
@@ -158,29 +163,6 @@ function StagePill({ children, tone = "neutral" }: { children: ReactNode; tone?:
   );
 }
 
-function StageToggleButton({
-  active,
-  children,
-  onClick
-}: {
-  active?: boolean;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={cn(
-        "inline-flex min-h-10 items-center gap-2 rounded-full border px-4 text-sm font-black transition",
-        active ? "border-white bg-white text-slate-950 shadow-lg shadow-black/20" : "border-white/15 bg-white/10 text-white hover:bg-white/18"
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      {children}
-    </button>
-  );
-}
-
 function MeetDockButton({
   active,
   danger,
@@ -198,8 +180,10 @@ function MeetDockButton({
 }) {
   return (
     <button
+      aria-label={label}
+      title={label}
       className={cn(
-        "group flex min-w-[4.75rem] shrink-0 flex-col items-center gap-1 rounded-3xl px-2 py-1.5 text-[0.7rem] font-black text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 disabled:cursor-not-allowed disabled:opacity-45",
+        "group flex w-11 shrink-0 flex-col items-center gap-1 rounded-2xl py-1 text-[0.65rem] font-black text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 disabled:cursor-not-allowed disabled:opacity-45 sm:w-[4.25rem]",
         !active && !danger && "hover:bg-white/8",
         active && "text-slate-950",
         danger && "text-rose-50 hover:bg-rose-500/10"
@@ -210,7 +194,7 @@ function MeetDockButton({
     >
       <span
         className={cn(
-          "flex h-12 w-12 items-center justify-center rounded-full border text-white shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)] transition",
+          "flex h-10 w-10 items-center justify-center rounded-full border text-white shadow-[0_14px_34px_-24px_rgba(0,0,0,0.9)] transition sm:h-11 sm:w-11",
           active && "border-white bg-white text-slate-950",
           danger && "border-rose-300/35 bg-rose-500 text-white group-hover:bg-rose-400",
           !active && !danger && "border-white/12 bg-white/12 group-hover:bg-white/20"
@@ -218,7 +202,7 @@ function MeetDockButton({
       >
         {icon}
       </span>
-      <span className="max-w-[4.75rem] truncate">{label}</span>
+      <span className="hidden max-w-[4.25rem] truncate sm:block">{label}</span>
     </button>
   );
 }
@@ -253,6 +237,8 @@ export function MeetingWorkspace({
   const meetingChannelRef = useRef<RealtimeChannel | null>(null);
   const suppressScrollBroadcastRef = useRef(false);
   const lastScrollBroadcastRef = useRef(0);
+  const lastDraftBroadcastRef = useRef(0);
+  const activeDraftIdRef = useRef<string | null>(null);
   const [meeting, setMeeting] = useState(initialMeeting);
   const [participants, setParticipants] = useState(initialParticipants);
   const [documents, setDocuments] = useState(initialDocuments);
@@ -266,7 +252,10 @@ export function MeetingWorkspace({
   const [tool, setTool] = useState<AnnotationTool>("pen");
   const [color, setColor] = useState(profile.color ?? "#0f4c5c");
   const [board, setBoard] = useState<BoardSize>(defaultBoard);
+  const [floatingBoard, setFloatingBoard] = useState<BoardSize>(defaultBoard);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
+  const [remoteDrafts, setRemoteDrafts] = useState<AnnotationDraftPreview[]>([]);
+  const [morePanel, setMorePanel] = useState<MorePanel>(null);
   const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string; signedUrl?: string | null } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
@@ -292,12 +281,12 @@ export function MeetingWorkspace({
   const participantControlRows = participants.filter((participant) => participant.role_snapshot === "participant");
   const selectedDocumentHasAnnotations = hasSavableAnnotations(annotations, selectedDocumentId);
   const isPresentationLive = screenShareSession?.status === "live";
-  const useCompactMeetingDock = isPresentationLive || isWorkspaceFullscreen;
 
   const onSizeChange = useCallback((size: BoardSize) => setBoard(size), []);
+  const onFloatingSizeChange = useCallback((size: BoardSize) => setFloatingBoard(size), []);
 
   const scrollToBoard = useCallback(() => {
-    boardSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    boardSectionRef.current?.focus({ preventScroll: true });
   }, []);
 
   const focusBoardStage = useCallback(() => {
@@ -307,7 +296,6 @@ export function MeetingWorkspace({
 
   const focusScreenStage = useCallback(() => {
     setStageMode("screen");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
   const toggleWorkspaceFullscreen = useCallback(async () => {
@@ -383,6 +371,100 @@ export function MeetingWorkspace({
 
     setAnnotations(data?.annotations ?? []);
   }, [meeting.id, supabase]);
+
+  const upsertAnnotation = useCallback((annotation: Annotation) => {
+    setAnnotations((current) => {
+      const existingIndex = current.findIndex((item) => item.id === annotation.id);
+      if (annotation.is_deleted) return current.filter((item) => item.id !== annotation.id);
+      if (existingIndex === -1) return [...current, annotation];
+      return current.map((item) => (item.id === annotation.id ? annotation : item));
+    });
+  }, []);
+
+  const removeAnnotation = useCallback((annotationId: string) => {
+    setAnnotations((current) => current.filter((item) => item.id !== annotationId));
+  }, []);
+
+  const applyAnnotationCreatedPayload = useCallback(
+    (payload: Record<string, unknown> | null | undefined) => {
+      const annotation = payload?.annotation as Annotation | undefined;
+      if (annotation?.id && annotation.meeting_id === meeting.id) {
+        upsertAnnotation(annotation);
+        return;
+      }
+      void refetchAnnotations();
+    },
+    [meeting.id, refetchAnnotations, upsertAnnotation]
+  );
+
+  const applyAnnotationUpdatedPayload = useCallback(
+    (payload: Record<string, unknown> | null | undefined) => {
+      const annotation = payload?.annotation as Annotation | undefined;
+      if (annotation?.id && annotation.meeting_id === meeting.id) {
+        upsertAnnotation(annotation);
+        return;
+      }
+      void refetchAnnotations();
+    },
+    [meeting.id, refetchAnnotations, upsertAnnotation]
+  );
+
+  const applyAnnotationDeletedPayload = useCallback(
+    (payload: Record<string, unknown> | null | undefined) => {
+      const annotationId = typeof payload?.annotationId === "string" ? payload.annotationId : null;
+      if (annotationId) {
+        removeAnnotation(annotationId);
+        return;
+      }
+      void refetchAnnotations();
+    },
+    [refetchAnnotations, removeAnnotation]
+  );
+
+  const applyAnnotationsClearedPayload = useCallback(
+    (payload: Record<string, unknown> | null | undefined) => {
+      const pageId = typeof payload?.pageId === "string" ? payload.pageId : null;
+      if (pageId) {
+        setAnnotations((current) => current.filter((annotation) => annotation.page_id !== pageId));
+        return;
+      }
+      void refetchAnnotations();
+    },
+    [refetchAnnotations]
+  );
+
+  const applyAnnotationDraftPayload = useCallback(
+    (payload: Record<string, unknown> | null | undefined) => {
+      const sourceUserId = typeof payload?.sourceUserId === "string" ? payload.sourceUserId : null;
+      const id = typeof payload?.id === "string" ? payload.id : null;
+      if (!sourceUserId || !id || sourceUserId === profile.id) return;
+
+      if (payload?.active === false) {
+        setRemoteDrafts((current) => current.filter((draft) => draft.id !== id));
+        return;
+      }
+
+      const pageId = typeof payload.pageId === "string" ? payload.pageId : null;
+      const type = tools.some((item) => item.id === payload.type) ? (payload.type as AnnotationTool) : null;
+      const draftColor = typeof payload.color === "string" ? payload.color : null;
+      const draftPayload = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : null;
+      if (!pageId || !type || !draftColor || !draftPayload) return;
+
+      setRemoteDrafts((current) => {
+        const nextDraft: AnnotationDraftPreview = {
+          id,
+          sourceUserId,
+          pageId,
+          type,
+          color: draftColor,
+          payload: draftPayload,
+          updatedAt: typeof payload.updatedAt === "string" ? payload.updatedAt : new Date().toISOString()
+        };
+        return [...current.filter((draft) => draft.id !== id), nextDraft];
+      });
+    },
+    [profile.id]
+  );
 
   const refetchPermissions = useCallback(async () => {
     const { data } = await supabase.from("participant_permissions").select("*").eq("meeting_id", meeting.id);
@@ -485,10 +567,11 @@ export function MeetingWorkspace({
       })
       .on("broadcast", { event: REALTIME_EVENTS.participantJoined }, () => void refetchParticipants())
       .on("broadcast", { event: REALTIME_EVENTS.participantLeft }, () => void refetchParticipants())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationCreated }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationUpdated }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationDeleted }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationsCleared }, () => void refetchAnnotations())
+      .on("broadcast", { event: REALTIME_EVENTS.annotationDraftChanged }, ({ payload }) => applyAnnotationDraftPayload(payload as Record<string, unknown> | null | undefined))
+      .on("broadcast", { event: REALTIME_EVENTS.annotationCreated }, ({ payload }) => applyAnnotationCreatedPayload(payload as Record<string, unknown> | null | undefined))
+      .on("broadcast", { event: REALTIME_EVENTS.annotationUpdated }, ({ payload }) => applyAnnotationUpdatedPayload(payload as Record<string, unknown> | null | undefined))
+      .on("broadcast", { event: REALTIME_EVENTS.annotationDeleted }, ({ payload }) => applyAnnotationDeletedPayload(payload as Record<string, unknown> | null | undefined))
+      .on("broadcast", { event: REALTIME_EVENTS.annotationsCleared }, ({ payload }) => applyAnnotationsClearedPayload(payload as Record<string, unknown> | null | undefined))
       .on("broadcast", { event: REALTIME_EVENTS.permissionsChanged }, ({ payload }) => {
         setMeeting((current) => ({
           ...current,
@@ -502,7 +585,10 @@ export function MeetingWorkspace({
       .on("broadcast", { event: REALTIME_EVENTS.documentUnlocked }, () => setMeeting((current) => ({ ...current, document_locked: false })))
       .on("broadcast", { event: REALTIME_EVENTS.screenStarted }, () => void refetchScreenShareSession())
       .on("broadcast", { event: REALTIME_EVENTS.screenPaused }, () => void refetchScreenShareSession())
-      .on("broadcast", { event: REALTIME_EVENTS.screenStopped }, () => void refetchScreenShareSession())
+      .on("broadcast", { event: REALTIME_EVENTS.screenStopped }, () => {
+        setStageMode("board");
+        void refetchScreenShareSession();
+      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED" && profile.role === "participant") {
           void channel.send({
@@ -517,24 +603,24 @@ export function MeetingWorkspace({
       meetingChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [applyRemoteBoardViewport, canUsePresenterControls, meeting.id, profile.id, profile.role, refetchAnnotations, refetchDocuments, refetchParticipants, refetchPermissions, refetchScreenShareSession, scrollToBoard, supabase]);
-
-  useEffect(() => {
-    if (!selectedPageId) return;
-
-    const channel = supabase.channel(`meeting:${meeting.id}:page:${selectedPageId}`);
-
-    channel
-      .on("broadcast", { event: REALTIME_EVENTS.annotationCreated }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationUpdated }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationDeleted }, () => void refetchAnnotations())
-      .on("broadcast", { event: REALTIME_EVENTS.annotationsCleared }, () => void refetchAnnotations())
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [meeting.id, refetchAnnotations, selectedPageId, supabase]);
+  }, [
+    applyAnnotationCreatedPayload,
+    applyAnnotationDeletedPayload,
+    applyAnnotationDraftPayload,
+    applyAnnotationUpdatedPayload,
+    applyAnnotationsClearedPayload,
+    applyRemoteBoardViewport,
+    canUsePresenterControls,
+    meeting.id,
+    profile.id,
+    profile.role,
+    refetchDocuments,
+    refetchParticipants,
+    refetchPermissions,
+    refetchScreenShareSession,
+    scrollToBoard,
+    supabase
+  ]);
 
   useEffect(() => {
     const presenceChannel = supabase.channel(`presence:meeting:${meeting.id}`, {
@@ -564,6 +650,15 @@ export function MeetingWorkspace({
       void supabase.removeChannel(presenceChannel);
     };
   }, [meeting.id, profile.color, profile.full_name, profile.id, profile.role, supabase]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const cutoff = Date.now() - 5000;
+      setRemoteDrafts((current) => current.filter((draft) => draft.pageId === selectedPageId && new Date(draft.updatedAt).getTime() > cutoff));
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [selectedPageId]);
 
   async function preparePages(file: File, documentType: MeetingDocument["document_type"]): Promise<PageDraft[]> {
     if (documentType === "pdf") return getPdfPageDrafts(file);
@@ -846,6 +941,25 @@ export function MeetingWorkspace({
     if (!selectedDocument || !selectedPage) return;
     setMessage(null);
     setAnnotationSaveStatus("saving");
+    const now = new Date().toISOString();
+    const pendingAnnotation: Annotation = {
+      id: `pending-${crypto.randomUUID()}`,
+      meeting_id: meeting.id,
+      document_id: selectedDocument.id,
+      page_id: selectedPage.id,
+      user_id: profile.id,
+      user_name_snapshot: profile.full_name,
+      designation_snapshot: profile.designation,
+      role_snapshot: profile.role,
+      annotation_type: type,
+      color: annotationColor,
+      payload,
+      version: 1,
+      is_deleted: false,
+      created_at: now,
+      updated_at: now
+    };
+    setAnnotations((current) => [...current, pendingAnnotation]);
 
     const { data, error } = await supabase.functions.invoke<WorkspaceAnnotationsResult>("workspace-annotations", {
       body: {
@@ -880,6 +994,7 @@ export function MeetingWorkspace({
 
     if (!annotation) {
       setAnnotationSaveStatus("error");
+      removeAnnotation(pendingAnnotation.id);
       setMessage({
         type: "error",
         text:
@@ -893,8 +1008,8 @@ export function MeetingWorkspace({
 
     setAnnotationSaveStatus("saved");
     setLastAnnotationSavedAt(new Date());
-    setAnnotations((current) => [...current, annotation]);
-    await sendMeetingBroadcast(REALTIME_EVENTS.annotationCreated, { annotationId: annotation.id, pageId: selectedPage.id });
+    setAnnotations((current) => current.map((item) => (item.id === pendingAnnotation.id ? annotation : item)));
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationCreated, { annotation, annotationId: annotation.id, pageId: selectedPage.id });
   }
 
   async function deleteAnnotation(annotation: Annotation) {
@@ -908,7 +1023,7 @@ export function MeetingWorkspace({
       return;
     }
 
-    setAnnotations((current) => current.filter((item) => item.id !== annotation.id));
+    removeAnnotation(annotation.id);
     await sendMeetingBroadcast(REALTIME_EVENTS.annotationDeleted, { annotationId: annotation.id, pageId: annotation.page_id });
   }
 
@@ -935,8 +1050,8 @@ export function MeetingWorkspace({
       return;
     }
 
-    setAnnotations((current) => current.map((item) => (item.id === annotation.id ? updated : item)));
-    await sendMeetingBroadcast(REALTIME_EVENTS.annotationUpdated, { annotationId: annotation.id, pageId: annotation.page_id });
+    upsertAnnotation(updated);
+    await sendMeetingBroadcast(REALTIME_EVENTS.annotationUpdated, { annotation: updated, annotationId: annotation.id, pageId: annotation.page_id });
     setMessage({ type: "success", text: "Annotation updated for everyone." });
   }
 
@@ -1070,7 +1185,7 @@ export function MeetingWorkspace({
     }
 
     setScreenShareSession(data as ScreenShareSession);
-    setStageMode("screen");
+    setStageMode("board");
     await sendMeetingBroadcast(REALTIME_EVENTS.screenStarted, { sessionId: data.id });
   }
 
@@ -1109,6 +1224,7 @@ export function MeetingWorkspace({
 
     const stoppedSessionId = screenShareSession.id;
     setScreenShareSession(null);
+    setStageMode("board");
     await sendMeetingBroadcast(REALTIME_EVENTS.screenStopped, { sessionId: stoppedSessionId });
   }
 
@@ -1129,6 +1245,37 @@ export function MeetingWorkspace({
       topRatio,
       leftRatio,
       sourceUserId: profile.id
+    });
+  }
+
+  function broadcastAnnotationDraft(draft: Omit<AnnotationDraftPreview, "sourceUserId" | "pageId" | "updatedAt"> | null) {
+    if (!selectedPageId) return;
+
+    if (!draft) {
+      const draftId = activeDraftIdRef.current;
+      activeDraftIdRef.current = null;
+      lastDraftBroadcastRef.current = 0;
+      if (!draftId) return;
+      void sendMeetingBroadcast(REALTIME_EVENTS.annotationDraftChanged, {
+        id: draftId,
+        sourceUserId: profile.id,
+        pageId: selectedPageId,
+        active: false
+      });
+      return;
+    }
+
+    activeDraftIdRef.current = draft.id;
+    const now = Date.now();
+    if (now - lastDraftBroadcastRef.current < 36) return;
+    lastDraftBroadcastRef.current = now;
+
+    void sendMeetingBroadcast(REALTIME_EVENTS.annotationDraftChanged, {
+      ...draft,
+      sourceUserId: profile.id,
+      pageId: selectedPageId,
+      active: true,
+      updatedAt: new Date().toISOString()
     });
   }
 
@@ -1174,12 +1321,20 @@ export function MeetingWorkspace({
           : "Ready";
   const meetingStatusTone = meeting.status === "live" ? "success" : meeting.status === "completed" || meeting.status === "cancelled" ? "danger" : "warning";
   const annotationStatusTone = annotationSaveStatus === "error" ? "danger" : annotationSaveStatus === "saved" ? "success" : annotationSaveStatus === "saving" ? "warning" : "neutral";
+  const visibleRemoteDrafts = selectedPageId ? remoteDrafts.filter((draft) => draft.pageId === selectedPageId) : [];
+  const shouldShowFloatingScreen = canUseScreenShare && boardIsMainStage && (canUsePresenterControls || isPresentationLive || screenShareSession?.status === "paused");
+  const shouldShowFloatingBoard = screenIsMainStage;
+  const boardAvailabilityText = canAnnotate
+    ? "Annotation enabled"
+    : canAnnotateByPermission && !boardIsMainStage
+      ? "Board parked"
+      : meeting.document_locked
+        ? "Board locked"
+        : "Annotation unavailable";
+  const activeTool = tools.find((item) => item.id === tool) ?? tools[0];
 
   return (
-    <div
-      ref={workspaceRootRef}
-      className="-mx-3 -mb-28 -mt-4 min-h-[calc(100svh-5rem)] space-y-4 overflow-auto rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.25),transparent_32%),linear-gradient(135deg,#020617,#111827_55%,#0f172a)] p-3 shadow-[0_32px_120px_-54px_rgba(15,23,42,0.9)] sm:-mx-5 sm:p-4 lg:-mx-8 lg:-mt-5 lg:p-5"
-    >
+    <div ref={workspaceRootRef} className="fixed inset-0 z-50 h-[100svh] w-screen overflow-hidden bg-slate-950 text-white">
       <input
         ref={quickUploadInputRef}
         disabled={uploading || savingSnapshot}
@@ -1189,8 +1344,10 @@ export function MeetingWorkspace({
         onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
       />
 
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,#04111f,#0f172a_48%,#101827)]" />
+
       {message ? (
-        <Alert className={message.type === "error" ? "border-destructive/30 bg-destructive/5 text-destructive" : message.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-primary/20 bg-primary/5 text-primary"}>
+        <Alert className={cn("absolute left-3 right-3 top-[calc(env(safe-area-inset-top)+4.8rem)] z-50 mx-auto max-w-3xl border bg-white/95 pr-12 text-slate-950 shadow-[0_18px_60px_-28px_rgba(0,0,0,0.75)] backdrop-blur-xl", message.type === "error" && "border-rose-300 text-rose-700", message.type === "success" && "border-emerald-200 text-emerald-800")}>
           <AlertTitle>{message.type === "error" ? "Workspace issue" : message.type === "success" ? "Workspace updated" : "Workspace notice"}</AlertTitle>
           <AlertDescription className="space-y-3">
             <span className="block">{message.text}</span>
@@ -1203,83 +1360,126 @@ export function MeetingWorkspace({
               </Button>
             ) : null}
           </AlertDescription>
+          <button aria-label="Dismiss notice" className="absolute right-3 top-3 rounded-full p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-950" onClick={() => setMessage(null)} type="button">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         </Alert>
       ) : null}
 
-      <div className="rounded-[2rem] border border-white/10 bg-white/10 p-3 text-white shadow-soft backdrop-blur-xl sm:p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <header className="safe-top pointer-events-none absolute inset-x-0 top-0 z-40 px-2 sm:px-4">
+        <div className="pointer-events-auto mx-auto flex max-w-6xl items-center justify-between gap-2 rounded-2xl border border-white/10 bg-slate-950/78 px-3 py-2 shadow-[0_20px_70px_-40px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
           <div className="min-w-0">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
               <StagePill tone={meetingStatusTone}>{meeting.status}</StagePill>
-              <StagePill tone={annotationStatusTone}>{annotationStatusText}</StagePill>
-              <StagePill tone={meeting.document_locked ? "danger" : "success"}>{meeting.document_locked ? "Board locked" : "Board open"}</StagePill>
+              <span className="truncate text-sm font-black sm:text-base">{getStageModeLabel(stageMode)}</span>
             </div>
-            <p className="truncate text-lg font-black sm:text-2xl">{getStageModeLabel(stageMode)}</p>
-            <p className="truncate text-xs text-white/65 sm:text-sm">
-              {selectedDocument ? selectedDocument.title : "No board selected"} · {presenceUsers.length} online · Code {meeting.code}
+            <p className="mt-1 max-w-[52vw] truncate text-xs text-white/60 sm:max-w-2xl">
+              {selectedDocument ? selectedDocument.title : "No board selected"} | {presenceUsers.length} online | Code {meeting.code}
             </p>
           </div>
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <StageToggleButton active={boardIsMainStage} onClick={focusBoardStage}>
-              <FileText className="h-4 w-4" aria-hidden="true" />
-              Board
-            </StageToggleButton>
-            {canUseScreenShare ? (
-              <StageToggleButton active={screenIsMainStage} onClick={focusScreenStage}>
-                <MonitorUp className="h-4 w-4" aria-hidden="true" />
-                Screen
-              </StageToggleButton>
-            ) : null}
-            <StageToggleButton active={isWorkspaceFullscreen} onClick={toggleWorkspaceFullscreen}>
-              {isWorkspaceFullscreen ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
-              {isWorkspaceFullscreen ? "Exit full" : "Full screen"}
-            </StageToggleButton>
-            {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
-              <Button onClick={startWorkspace} disabled={isPending} size="sm" type="button" className="min-h-10 rounded-full bg-emerald-400 px-4 font-black text-emerald-950 hover:bg-emerald-300">
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
-                Start
-              </Button>
-            ) : null}
-            {profile.role === "participant" ? (
-              <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" type="button" className="min-h-10 rounded-full bg-rose-500 px-4 font-black text-white hover:bg-rose-400">
-                {leavingMeeting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogOut className="h-4 w-4" aria-hidden="true" />}
-                Leave
-              </Button>
-            ) : null}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <StagePill tone={annotationStatusTone}>{annotationStatusText}</StagePill>
+            <button aria-label="Open meeting menu" className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white hover:bg-white/18" onClick={() => setMorePanel("meeting")} type="button">
+              <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
+            </button>
           </div>
         </div>
-      </div>
+      </header>
 
-      {canUseScreenShare && screenIsMainStage ? (
-        <ScreenSharePanel
-          allowPresenterControls={canUsePresenterControls}
-          meetingId={meeting.id}
-          onOpenBoard={focusBoardStage}
-          onFocusBoard={focusBoardStage}
-          onFocusScreen={focusScreenStage}
-          presentation="stage"
-          session={screenShareSession}
-          onStarted={markScreenShareStarted}
-          onPaused={markScreenSharePaused}
-          onStopped={markScreenShareStopped}
-        />
+      <main className="relative z-10 h-full w-full overflow-hidden px-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] pt-[calc(env(safe-area-inset-top)+4.5rem)] sm:px-4 sm:pb-[calc(env(safe-area-inset-bottom)+5.5rem)] sm:pt-[calc(env(safe-area-inset-top)+5rem)]">
+        {boardIsMainStage ? (
+          <section ref={boardSectionRef} id="annotation-board" tabIndex={-1} className="h-full min-h-0 overflow-hidden rounded-lg border border-white/10 bg-white/[0.06] shadow-[0_30px_90px_-48px_rgba(0,0,0,0.92)] outline-none backdrop-blur">
+            {!selectedDocument || !selectedPage ? (
+              <div className="flex h-full items-center justify-center p-5 text-center">
+                <div className="max-w-sm">
+                  <FileUp className="mx-auto mb-3 h-10 w-10 text-emerald-300" aria-hidden="true" />
+                  <p className="text-xl font-black">No board selected</p>
+                  <p className="mt-2 text-sm leading-6 text-white/65">Upload a PDF/image or create a whiteboard to start the shared canvas.</p>
+                  {canUsePresenterControls ? (
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <Button disabled={uploading || savingSnapshot} onClick={() => quickUploadInputRef.current?.click()} type="button" className="rounded-2xl bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300">
+                        <FileUp className="h-4 w-4" aria-hidden="true" />
+                        Upload
+                      </Button>
+                      <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline" className="rounded-2xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                        Board
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div
+                ref={boardScrollRef}
+                onScroll={broadcastBoardViewport}
+                className="h-full w-full overflow-hidden p-1 sm:p-2"
+              >
+                <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange} frameClassName="border-white/80 shadow-[0_22px_70px_-38px_rgba(0,0,0,0.7)]">
+                  <AnnotationCanvas
+                    annotations={pageAnnotations}
+                    remoteDrafts={visibleRemoteDrafts}
+                    board={board}
+                    tool={tool}
+                    color={color}
+                    canAnnotate={canAnnotate}
+                    onCreate={createAnnotation}
+                    onDelete={deleteAnnotation}
+                    onDraftChange={broadcastAnnotationDraft}
+                  />
+                </DocumentRenderer>
+              </div>
+            )}
+            <div className="pointer-events-none absolute left-3 top-[calc(env(safe-area-inset-top)+4.65rem)] z-20 hidden rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-xs font-black text-white/80 backdrop-blur-xl sm:block">
+              {boardAvailabilityText} | {activeTool.label}
+            </div>
+          </section>
+        ) : (
+          <section className="h-full min-h-0 overflow-hidden rounded-lg border border-white/10 bg-black shadow-[0_30px_90px_-48px_rgba(0,0,0,0.92)]">
+            {canUseScreenShare ? (
+              <ScreenSharePanel
+                allowPresenterControls={canUsePresenterControls}
+                meetingId={meeting.id}
+                onOpenBoard={focusBoardStage}
+                onFocusBoard={focusBoardStage}
+                onFocusScreen={focusScreenStage}
+                presentation="stage"
+                session={screenShareSession}
+                onStarted={markScreenShareStarted}
+                onPaused={markScreenSharePaused}
+                onStopped={markScreenShareStopped}
+              />
+            ) : null}
+          </section>
+        )}
+      </main>
+
+      {boardIsMainStage && selectedDocument && selectedPage ? (
+        <div className="pointer-events-none absolute inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+4.9rem)] z-40 flex justify-center sm:bottom-[calc(env(safe-area-inset-bottom)+5.35rem)]">
+          <div className="pointer-events-auto grid w-full max-w-[25rem] grid-cols-9 gap-1 rounded-2xl border border-white/10 bg-slate-950/86 p-1.5 shadow-[0_22px_70px_-36px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
+            {tools.map((item) => (
+              <button
+                key={item.id}
+                aria-label={item.label}
+                title={item.label}
+                className={cn("flex h-10 min-w-0 items-center justify-center rounded-xl border text-white transition", tool === item.id ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/10 hover:bg-white/18")}
+                onClick={() => setTool(item.id)}
+                type="button"
+              >
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ))}
+            <label className="relative flex h-10 min-w-0 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10" title="Color">
+              <input aria-label="Annotation color" value={color} onChange={(event) => setColor(event.target.value)} type="color" className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/25" style={{ backgroundColor: color }}>
+                <Palette className="h-3.5 w-3.5 text-white drop-shadow" aria-hidden="true" />
+              </span>
+            </label>
+          </div>
+        </div>
       ) : null}
 
-      {screenIsMainStage ? (
-        <button
-          className="fixed bottom-[calc(env(safe-area-inset-bottom)+9.25rem)] right-3 z-40 w-[min(calc(100vw-1.5rem),18rem)] rounded-[1.5rem] border border-white/70 bg-white/94 p-3 text-left shadow-[0_28px_90px_-30px_rgba(15,23,42,0.65)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white xl:bottom-6 xl:right-6"
-          onClick={focusBoardStage}
-          type="button"
-        >
-          <span className="flex items-center gap-2 text-sm font-black">
-            <FileText className="h-4 w-4 text-primary" aria-hidden="true" />
-            Annotation board
-          </span>
-          <span className="mt-1 block text-xs leading-5 text-muted-foreground">Parked while live screen is full. Tap to annotate.</span>
-        </button>
-      ) : null}
-
-      {canUseScreenShare && boardIsMainStage ? (
+      {shouldShowFloatingScreen ? (
         <ScreenSharePanel
           allowPresenterControls={canUsePresenterControls}
           meetingId={meeting.id}
@@ -1294,340 +1494,40 @@ export function MeetingWorkspace({
         />
       ) : null}
 
-      <div className={cn("grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]")}>
-        {boardIsMainStage ? (
-        <Card ref={boardSectionRef} id="annotation-board" className="min-h-[calc(100svh-14rem)] overflow-hidden scroll-mt-4 border-white/70 bg-white/96 shadow-[0_30px_90px_-42px_rgba(15,23,42,0.75)] backdrop-blur">
-          <CardHeader className="pb-3">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <CardTitle>Shared annotation workspace</CardTitle>
-                <CardDescription>
-                  Presenter uploads documents, selects the shared page, and participants annotate in realtime when the meeting is live.
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={meeting.status === "live" ? "success" : "secondary"}>{meeting.status}</Badge>
-                {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
-                  <Button onClick={startWorkspace} disabled={isPending} size="sm">
-                    {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-4 w-4" aria-hidden="true" />}
-                    Start workspace
-                  </Button>
-                ) : null}
-                {canUsePresenterControls && meeting.status !== "completed" ? (
-                  <Button onClick={endMeeting} disabled={isPending || savingSnapshot} size="sm" variant="outline">
-                    {isPending || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <StopCircle className="h-4 w-4" aria-hidden="true" />}
-                    End meeting
-                  </Button>
-                ) : null}
-                {profile.role === "participant" ? (
-                  <Button onClick={leaveMeeting} disabled={leavingMeeting} size="sm" variant="outline">
-                    {leavingMeeting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <LogOut className="h-4 w-4" aria-hidden="true" />}
-                    Leave meeting
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-col gap-3 rounded-3xl border border-border/70 bg-white/75 p-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
-                {tools.map((item) => (
-                  <Button
-                    key={item.id}
-                    onClick={() => setTool(item.id)}
-                    size="sm"
-                    type="button"
-                    variant={tool === item.id ? "default" : "outline"}
-                    className="min-h-12 shrink-0 rounded-2xl px-3"
-                  >
-                    <item.icon className="h-4 w-4" aria-hidden="true" />
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
-              <label className="flex items-center gap-2 text-sm font-semibold">
-                Color
-                <input value={color} onChange={(event) => setColor(event.target.value)} type="color" className="h-11 w-14 rounded-xl border border-border bg-white p-1" />
-              </label>
-            </div>
-
-            {!selectedDocument || !selectedPage ? (
-              <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-dashed border-primary/25 bg-primary/5 p-8 text-center">
-                <div className="max-w-md space-y-3">
-                  <FileUp className="mx-auto h-10 w-10 text-primary" aria-hidden="true" />
-                  <p className="text-xl font-black">No shared page selected</p>
-                  <p className="text-sm text-muted-foreground">Presenter uploads a PDF or image to open the annotation board. Office files are saved and routed through conversion before annotation.</p>
-                </div>
-              </div>
+      {shouldShowFloatingBoard ? (
+        <button
+          className="fixed right-3 top-[calc(env(safe-area-inset-top)+4.9rem)] z-40 w-[min(42vw,13.5rem)] overflow-hidden rounded-lg border border-white/20 bg-slate-950/92 p-2 text-left text-white shadow-[0_24px_80px_-36px_rgba(0,0,0,0.9)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:bg-slate-900 sm:right-4 sm:w-60"
+          onClick={focusBoardStage}
+          type="button"
+        >
+          <span className="mb-2 flex items-center gap-2 text-xs font-black">
+            <FileText className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+            Board
+          </span>
+          <span className="block h-24 overflow-hidden rounded-md bg-white/8 sm:h-32">
+            {selectedDocument && selectedPage ? (
+              <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onFloatingSizeChange} frameClassName="rounded-md border-white/60">
+                <AnnotationCanvas
+                  annotations={pageAnnotations}
+                  remoteDrafts={visibleRemoteDrafts}
+                  board={floatingBoard}
+                  tool={tool}
+                  color={color}
+                  canAnnotate={false}
+                  onCreate={async () => undefined}
+                  onDelete={async () => undefined}
+                />
+              </DocumentRenderer>
             ) : (
-              <div
-                ref={boardScrollRef}
-                onScroll={broadcastBoardViewport}
-                className="h-[calc(100svh-27rem)] min-h-[360px] overflow-auto rounded-3xl border border-border/60 bg-white/40 p-2 shadow-inner overscroll-contain sm:h-[calc(100svh-25rem)] lg:h-[calc(100svh-23rem)] xl:h-[calc(100svh-22rem)]"
-              >
-                <DocumentRenderer document={selectedDocument} page={selectedPage} signedUrl={signedUrl} onSizeChange={onSizeChange}>
-                  <AnnotationCanvas
-                    annotations={pageAnnotations}
-                    board={board}
-                    tool={tool}
-                    color={color}
-                    canAnnotate={canAnnotate}
-                    onCreate={createAnnotation}
-                    onDelete={deleteAnnotation}
-                  />
-                </DocumentRenderer>
-              </div>
+              <span className="flex h-full items-center justify-center text-xs text-white/55">No board</span>
             )}
+          </span>
+          <span className="mt-2 block truncate text-[0.68rem] font-bold text-white/60">Read-only while floating</span>
+        </button>
+      ) : null}
 
-            <div className="flex flex-col gap-3 rounded-3xl bg-secondary/60 p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                {canAnnotate
-                  ? "Annotation is enabled for you. Draw with touch, stylus, or mouse."
-                  : canAnnotateByPermission && !boardIsMainStage
-                    ? "Annotation is paused while live screen is the main stage. Switch to Board to annotate."
-                  : "Annotation is currently unavailable for your role, meeting status, selected document, or lock state."}
-              </p>
-              {selectedDocumentPages.length > 0 ? (
-                <div className="flex items-center gap-2">
-                  <Button disabled={!canUsePresenterControls || selectedPageIndex <= 0} onClick={() => changePage(selectedDocumentPages[selectedPageIndex - 1])} size="sm" variant="outline">
-                    Prev
-                  </Button>
-                  <span className="font-bold text-foreground">Page {selectedPage?.page_number ?? 1} / {selectedDocumentPages.length}</span>
-                  <Button disabled={!canUsePresenterControls || selectedPageIndex < 0 || selectedPageIndex >= selectedDocumentPages.length - 1} onClick={() => changePage(selectedDocumentPages[selectedPageIndex + 1])} size="sm" variant="outline">
-                    Next
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-        ) : (
-          <Card ref={boardSectionRef} id="annotation-board" className="scroll-mt-4 border-white/70 bg-white/88 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-primary" aria-hidden="true" />
-                Annotation board parked
-              </CardTitle>
-              <CardDescription>
-                Live screen is the main stage. The board is intentionally read-only while parked so touch gestures do not create accidental annotations.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Button className="w-full rounded-2xl" onClick={focusBoardStage} type="button">
-                <Maximize2 className="h-4 w-4" aria-hidden="true" />
-                Open board full screen
-              </Button>
-              <p className="rounded-2xl bg-secondary/70 p-3 text-sm text-muted-foreground">
-                Switch back to the board to annotate with touch, stylus, or mouse. Presenter page/scroll broadcasts are still remembered while you watch the screen.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
-        <aside className="space-y-5 lg:sticky lg:top-4 lg:self-start">
-          {canUsePresenterControls ? (
-            <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
-              <CardHeader>
-                <CardTitle>Presenter controls</CardTitle>
-                <CardDescription className="text-slate-300">Control annotation access, document lock state, page cleanup, and participant permissions.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-2">
-                  <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                    {meeting.participant_annotation_enabled ? "Disable participant annotation" : "Enable participant annotation"}
-                  </Button>
-                  <Button onClick={() => setDocumentLocked(!meeting.document_locked)} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                    {meeting.document_locked ? <LockOpen className="h-4 w-4" aria-hidden="true" /> : <Lock className="h-4 w-4" aria-hidden="true" />}
-                    {meeting.document_locked ? "Unlock document" : "Lock document"}
-                  </Button>
-                  <Button disabled={!selectedPage || pageAnnotations.length === 0} onClick={clearCurrentPageAnnotations} type="button" variant="outline" className="border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white">
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    Clear current page
-                  </Button>
-                </div>
-
-                <div className="rounded-3xl border border-white/10 bg-white/[0.07] p-4 text-sm">
-                  <p className="font-bold">Current page annotations</p>
-                  <p className="mt-1 text-xs text-slate-300">Presenter can recolor, edit text annotations, or remove any annotation on the selected page.</p>
-                  <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                    {pageAnnotations.length === 0 ? <p className="text-xs text-slate-300">No annotations on this page yet.</p> : null}
-                    {pageAnnotations.map((annotation) => (
-                      <div key={annotation.id} className="rounded-2xl border border-white/10 bg-slate-900 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-bold">{annotation.user_name_snapshot}</p>
-                            <p className="text-xs text-slate-300">
-                              {annotation.annotation_type} · {annotation.role_snapshot}
-                            </p>
-                          </div>
-                          <span className="h-5 w-5 shrink-0 rounded-full border border-border" style={{ backgroundColor: annotation.color }} />
-                        </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <Button onClick={() => updateAnnotation(annotation, { color })} size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                            Use active color
-                          </Button>
-                          {annotation.annotation_type === "text" ? (
-                            <Button
-                              onClick={() => {
-                                const nextText = window.prompt("Edit annotation text", String(annotation.payload.text ?? ""));
-                                if (nextText?.trim()) {
-                                  void updateAnnotation(annotation, {
-                                    payload: { ...annotation.payload, text: nextText.trim() }
-                                  });
-                                }
-                              }}
-                              size="sm"
-                              type="button"
-                              variant="outline"
-                              className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"
-                            >
-                              Edit text
-                            </Button>
-                          ) : (
-                            <Button disabled size="sm" type="button" variant="outline" className="border-white/15 bg-white/10 text-white">
-                              Edit shape
-                            </Button>
-                          )}
-                          <Button className="col-span-2 border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white" onClick={() => deleteAnnotation(annotation)} size="sm" type="button" variant="outline">
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            Remove annotation
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-3xl border border-white/10 bg-white/[0.07] p-4 text-sm">
-                  <p className="font-bold">Participant permissions</p>
-                  <p className="mt-1 text-xs text-slate-300">Defaults allow annotation. Rows here override annotation, mute, and future download access.</p>
-                </div>
-
-                <div className="space-y-3">
-                  {participantControlRows.length === 0 ? <p className="text-sm text-slate-300">No participant attendance records yet.</p> : null}
-                  {participantControlRows.map((participant) => {
-                    const permission = permissions.find((item) => item.user_id === participant.user_id);
-                    const canAnnotateParticipant = permission?.can_annotate ?? true;
-                    const isMuted = permission?.is_muted_from_annotation ?? false;
-                    const canDownload = permission?.can_download ?? false;
-
-                    return (
-                      <div key={participant.id} className="rounded-3xl border border-white/10 bg-white/[0.07] p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate font-bold">{participant.name_snapshot}</p>
-                            <p className="text-xs text-slate-300">{participant.designation_snapshot ?? "No designation"}</p>
-                          </div>
-                          <Badge variant={participant.is_present ? "success" : "outline"}>{participant.is_present ? "present" : "left"}</Badge>
-                        </div>
-                        <div className="mt-3 grid gap-2">
-                          <Button onClick={() => updateParticipantPermission(participant, { can_annotate: !canAnnotateParticipant })} size="sm" type="button" variant={canAnnotateParticipant ? "default" : "outline"} className={canAnnotateParticipant ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
-                            {canAnnotateParticipant ? "Can annotate" : "Annotation off"}
-                          </Button>
-                          <Button onClick={() => updateParticipantPermission(participant, { is_muted_from_annotation: !isMuted })} size="sm" type="button" variant={isMuted ? "default" : "outline"} className={isMuted ? "bg-rose-500 font-black text-white hover:bg-rose-400" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
-                            {isMuted ? "Muted from annotation" : "Not muted"}
-                          </Button>
-                          <Button onClick={() => updateParticipantPermission(participant, { can_download: !canDownload })} size="sm" type="button" variant={canDownload ? "default" : "outline"} className={canDownload ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"}>
-                            {canDownload ? "Download allowed" : "Download blocked"}
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
-            <CardHeader>
-              <CardTitle>Documents</CardTitle>
-              <CardDescription className="text-slate-300">PDF and images annotate immediately. PowerPoint, Word, and Excel files are saved with conversion fallback.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {canUpload ? (
-                <div className="grid gap-3">
-                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-300/35 bg-emerald-400/10 p-5 text-center text-sm font-black text-emerald-100">
-                    {uploading || savingSnapshot ? <Loader2 className="mb-2 h-6 w-6 animate-spin" aria-hidden="true" /> : <FileUp className="mb-2 h-6 w-6" aria-hidden="true" />}
-                    Upload PDF, image, PowerPoint, Word, or Excel
-                    {selectedDocumentHasAnnotations ? <span className="mt-1 text-xs font-medium text-slate-300">You will be asked to save the current annotations first.</span> : null}
-                    <input
-                      disabled={uploading || savingSnapshot}
-                      className="sr-only"
-                      type="file"
-                      accept=".pdf,image/png,image/jpeg,image/webp,.ppt,.pptx,.doc,.docx,.xls,.xlsx"
-                      onChange={(event) => void handleUpload(event.target.files?.[0] ?? null)}
-                    />
-                  </label>
-                  <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline" className="border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
-                    {uploading || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
-                    New whiteboard
-                  </Button>
-                </div>
-              ) : null}
-
-              <div className="space-y-3">
-                {documents.length === 0 ? <p className="text-sm text-slate-300">No documents uploaded yet.</p> : null}
-                {documents.map((document) => {
-                  const docPages = pages.filter((page) => page.document_id === document.id).sort((a, b) => a.page_number - b.page_number);
-                  const firstPage = docPages[0];
-                  const Icon = document.document_type === "image" ? ImageIcon : document.document_type === "pdf" ? FileUp : Presentation;
-                  return (
-                    <div key={document.id} className="rounded-3xl border border-white/10 bg-white/[0.07] p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-emerald-200">
-                          <Icon className="h-5 w-5" aria-hidden="true" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-bold">{document.title}</p>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            <Badge variant="secondary">{document.document_type}</Badge>
-                            <Badge variant={document.conversion_status === "ready" ? "success" : "outline"}>{document.conversion_status}</Badge>
-                          </div>
-                          {document.conversion_error ? <p className="mt-2 text-xs text-rose-200">{document.conversion_error}</p> : null}
-                        </div>
-                      </div>
-                      {firstPage ? (
-                        <Button className={cn("mt-3 w-full", selectedDocumentId === document.id ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950")} disabled={!canUsePresenterControls} onClick={() => selectDocumentPage(document, firstPage)} size="sm" variant={selectedDocumentId === document.id ? "default" : "outline"}>
-                          {selectedDocumentId === document.id ? "Selected" : "Broadcast document"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-950 text-white shadow-[0_28px_90px_-55px_rgba(0,0,0,0.9)]">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <UsersRound className="h-5 w-5" aria-hidden="true" />
-                Presence
-              </CardTitle>
-              <CardDescription className="text-slate-300">{presenceUsers.length} online in this meeting room.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {presenceUsers.length === 0 ? <p className="text-sm text-slate-300">Presence is connecting...</p> : null}
-              {presenceUsers.map((user) => (
-                <div key={`${user.userId}-${user.onlineAt}`} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.07] p-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: user.color ?? "#0f4c5c" }} />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold">{user.name}</p>
-                      <p className="text-xs text-slate-300">{user.role}</p>
-                    </div>
-                  </div>
-                  <Badge variant="success">online</Badge>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </aside>
-      </div>
-
-      <div className="pointer-events-none fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+4.85rem)] z-30 xl:hidden">
-        <div className="pointer-events-auto mx-auto flex max-w-3xl items-center gap-1 overflow-x-auto rounded-[2rem] border border-white/15 bg-slate-950/96 p-2 text-white shadow-[0_24px_90px_-34px_rgba(0,0,0,0.9)] backdrop-blur-2xl [scrollbar-width:none]">
+      <div className="pointer-events-none fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+0.45rem)] z-40">
+        <div className="pointer-events-auto mx-auto flex w-fit max-w-[calc(100vw-1rem)] items-center gap-1 rounded-[1.6rem] border border-white/15 bg-slate-950/95 px-2 py-1.5 text-white shadow-[0_24px_90px_-34px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
           <MeetDockButton
             active={boardIsMainStage}
             icon={<FileText className="h-5 w-5" aria-hidden="true" />}
@@ -1643,12 +1543,12 @@ export function MeetingWorkspace({
             />
           ) : null}
           <MeetDockButton
-            active={isWorkspaceFullscreen}
+            active={false}
             icon={isWorkspaceFullscreen ? <Minimize2 className="h-5 w-5" aria-hidden="true" /> : <Maximize2 className="h-5 w-5" aria-hidden="true" />}
             label={isWorkspaceFullscreen ? "Exit" : "Full"}
             onClick={toggleWorkspaceFullscreen}
           />
-          {!useCompactMeetingDock && selectedDocumentPages.length > 0 ? (
+          {canUsePresenterControls && selectedDocumentPages.length > 0 ? (
             <>
               <MeetDockButton
                 disabled={!canUsePresenterControls || selectedPageIndex <= 0}
@@ -1664,35 +1564,21 @@ export function MeetingWorkspace({
               />
             </>
           ) : null}
-          {canUsePresenterControls && !useCompactMeetingDock ? (
-            <>
-              <MeetDockButton
-                active={meeting.participant_annotation_enabled}
-                icon={<Highlighter className="h-5 w-5" aria-hidden="true" />}
-                label={meeting.participant_annotation_enabled ? "Annotate" : "Paused"}
-                onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)}
-              />
-              <MeetDockButton
-                danger={meeting.document_locked}
-                icon={meeting.document_locked ? <Lock className="h-5 w-5" aria-hidden="true" /> : <LockOpen className="h-5 w-5" aria-hidden="true" />}
-                label={meeting.document_locked ? "Locked" : "Open"}
-                onClick={() => setDocumentLocked(!meeting.document_locked)}
-              />
-              <MeetDockButton
-                disabled={uploading || savingSnapshot}
-                icon={<FileUp className="h-5 w-5" aria-hidden="true" />}
-                label="Upload"
-                onClick={() => quickUploadInputRef.current?.click()}
-              />
-              <MeetDockButton
-                disabled={uploading || savingSnapshot}
-                icon={<Plus className="h-5 w-5" aria-hidden="true" />}
-                label="Board+"
-                onClick={createWhiteboard}
-              />
-            </>
+          {canUsePresenterControls && meeting.status !== "live" && meeting.status !== "completed" && meeting.status !== "cancelled" ? (
+            <MeetDockButton
+              active
+              disabled={isPending}
+              icon={isPending ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : <PlayCircle className="h-5 w-5" aria-hidden="true" />}
+              label="Start"
+              onClick={startWorkspace}
+            />
           ) : null}
-          {canUsePresenterControls && meeting.status !== "completed" ? (
+          <MeetDockButton
+            icon={<MoreHorizontal className="h-5 w-5" aria-hidden="true" />}
+            label="More"
+            onClick={() => setMorePanel("meeting")}
+          />
+          {canUsePresenterControls && meeting.status === "live" ? (
             <MeetDockButton
               danger
               disabled={isPending || savingSnapshot}
@@ -1712,6 +1598,226 @@ export function MeetingWorkspace({
           ) : null}
         </div>
       </div>
+
+      {morePanel ? (
+        <div className="fixed inset-0 z-50">
+          <button aria-label="Close meeting menu" className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" onClick={() => setMorePanel(null)} type="button" />
+          <div className="safe-bottom absolute inset-x-0 bottom-0 rounded-t-2xl border border-white/12 bg-slate-950/98 p-3 text-white shadow-[0_-28px_90px_-35px_rgba(0,0,0,0.92)] backdrop-blur-2xl sm:left-auto sm:right-4 sm:w-[28rem] sm:rounded-2xl sm:bottom-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-base font-black">Meeting controls</p>
+                <p className="text-xs text-white/55">{boardAvailabilityText} | {presenceUsers.length} online</p>
+              </div>
+              <button aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/10 hover:bg-white/18" onClick={() => setMorePanel(null)} type="button">
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="mb-3 grid grid-cols-4 gap-1 rounded-xl bg-white/8 p-1">
+              {[
+                { id: "meeting" as const, label: "Meet" },
+                { id: "documents" as const, label: "Docs" },
+                { id: "people" as const, label: "People" },
+                { id: "annotations" as const, label: "Ink" }
+              ].map((item) => (
+                <button key={item.id} className={cn("min-h-10 rounded-lg text-xs font-black", morePanel === item.id ? "bg-white text-slate-950" : "text-white/72 hover:bg-white/10")} onClick={() => setMorePanel(item.id)} type="button">
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="max-h-[min(68svh,34rem)] overflow-y-auto pr-1 [scrollbar-width:thin]">
+              {morePanel === "meeting" ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="rounded-lg border border-white/10 bg-white/8 p-3">
+                      <p className="text-xs text-white/55">Code</p>
+                      <p className="mt-1 break-all text-xl font-black tracking-[0.2em] text-emerald-300">{meeting.code}</p>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-white/8 p-3">
+                      <p className="text-xs text-white/55">Page</p>
+                      <p className="mt-1 text-xl font-black">{selectedPage ? `${selectedPage.page_number}/${Math.max(selectedDocumentPages.length, 1)}` : "--"}</p>
+                    </div>
+                  </div>
+                  {canUsePresenterControls ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button onClick={() => setParticipantAnnotationEnabled(!meeting.participant_annotation_enabled)} type="button" variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                        <Highlighter className="h-4 w-4" aria-hidden="true" />
+                        {meeting.participant_annotation_enabled ? "Annotation on" : "Annotation off"}
+                      </Button>
+                      <Button onClick={() => setDocumentLocked(!meeting.document_locked)} type="button" variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                        {meeting.document_locked ? <Lock className="h-4 w-4" aria-hidden="true" /> : <LockOpen className="h-4 w-4" aria-hidden="true" />}
+                        {meeting.document_locked ? "Locked" : "Unlocked"}
+                      </Button>
+                      <Button disabled={!selectedPage || pageAnnotations.length === 0} onClick={clearCurrentPageAnnotations} type="button" variant="outline" className="rounded-xl border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white">
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        Clear page
+                      </Button>
+                      <Button asChild variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                        <a href={`/meetings/${meeting.id}/exports`}>
+                          <Download className="h-4 w-4" aria-hidden="true" />
+                          Exports
+                        </a>
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {morePanel === "documents" ? (
+                <div className="space-y-3">
+                  {canUpload ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button disabled={uploading || savingSnapshot} onClick={() => quickUploadInputRef.current?.click()} type="button" className="rounded-xl bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300">
+                        {uploading || savingSnapshot ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="h-4 w-4" aria-hidden="true" />}
+                        Upload
+                      </Button>
+                      <Button disabled={uploading || savingSnapshot} onClick={createWhiteboard} type="button" variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                        Whiteboard
+                      </Button>
+                    </div>
+                  ) : null}
+                  {selectedDocumentHasAnnotations ? <p className="rounded-lg bg-amber-400/10 p-3 text-xs text-amber-100">Saving will be requested before replacing a board that has annotations.</p> : null}
+                  <div className="grid gap-2">
+                    {documents.length === 0 ? <p className="text-sm text-white/60">No documents uploaded yet.</p> : null}
+                    {documents.map((document) => {
+                      const docPages = pages.filter((page) => page.document_id === document.id).sort((a, b) => a.page_number - b.page_number);
+                      const firstPage = docPages[0];
+                      const Icon = document.document_type === "image" ? ImageIcon : document.document_type === "pdf" ? FileUp : Presentation;
+                      return (
+                        <div key={document.id} className="rounded-lg border border-white/10 bg-white/8 p-3">
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 text-emerald-200">
+                              <Icon className="h-5 w-5" aria-hidden="true" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-black">{document.title}</p>
+                              <div className="mt-1 flex flex-wrap gap-2">
+                                <Badge variant="secondary">{document.document_type}</Badge>
+                                <Badge variant={document.conversion_status === "ready" ? "success" : "outline"}>{document.conversion_status}</Badge>
+                              </div>
+                              {document.conversion_error ? <p className="mt-2 text-xs text-rose-200">{document.conversion_error}</p> : null}
+                            </div>
+                          </div>
+                          {firstPage ? (
+                            <Button className={cn("mt-3 w-full rounded-xl", selectedDocumentId === document.id ? "bg-emerald-400 font-black text-emerald-950 hover:bg-emerald-300" : "border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950")} disabled={!canUsePresenterControls} onClick={() => selectDocumentPage(document, firstPage)} size="sm" variant={selectedDocumentId === document.id ? "default" : "outline"}>
+                              {selectedDocumentId === document.id ? "Selected" : "Broadcast"}
+                            </Button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {morePanel === "people" ? (
+                <div className="space-y-3">
+                  <div className="grid gap-2">
+                    {presenceUsers.length === 0 ? <p className="text-sm text-white/60">Presence is connecting...</p> : null}
+                    {presenceUsers.map((user) => (
+                      <div key={`${user.userId}-${user.onlineAt}`} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 p-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: user.color ?? "#0f4c5c" }} />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black">{user.name}</p>
+                            <p className="text-xs text-white/55">{user.role}</p>
+                          </div>
+                        </div>
+                        <Badge variant="success">online</Badge>
+                      </div>
+                    ))}
+                  </div>
+                  {canUsePresenterControls ? (
+                    <div className="grid gap-2">
+                      {participantControlRows.length === 0 ? <p className="text-sm text-white/60">No participant attendance records yet.</p> : null}
+                      {participantControlRows.map((participant) => {
+                        const permission = permissions.find((item) => item.user_id === participant.user_id);
+                        const canAnnotateParticipant = permission?.can_annotate ?? true;
+                        const isMuted = permission?.is_muted_from_annotation ?? false;
+                        const canDownload = permission?.can_download ?? false;
+
+                        return (
+                          <div key={participant.id} className="rounded-lg border border-white/10 bg-white/8 p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-black">{participant.name_snapshot}</p>
+                                <p className="text-xs text-white/55">{participant.designation_snapshot ?? "No designation"}</p>
+                              </div>
+                              <Badge variant={participant.is_present ? "success" : "outline"}>{participant.is_present ? "present" : "left"}</Badge>
+                            </div>
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                              <Button onClick={() => updateParticipantPermission(participant, { can_annotate: !canAnnotateParticipant })} size="sm" type="button" variant="outline" className={cn("rounded-xl border-white/15 bg-white/10 text-xs text-white hover:bg-white hover:text-slate-950", canAnnotateParticipant && "bg-emerald-400 text-emerald-950 hover:bg-emerald-300")}>
+                                Ink
+                              </Button>
+                              <Button onClick={() => updateParticipantPermission(participant, { is_muted_from_annotation: !isMuted })} size="sm" type="button" variant="outline" className={cn("rounded-xl border-white/15 bg-white/10 text-xs text-white hover:bg-white hover:text-slate-950", isMuted && "bg-rose-500 text-white hover:bg-rose-400")}>
+                                Mute
+                              </Button>
+                              <Button onClick={() => updateParticipantPermission(participant, { can_download: !canDownload })} size="sm" type="button" variant="outline" className={cn("rounded-xl border-white/15 bg-white/10 text-xs text-white hover:bg-white hover:text-slate-950", canDownload && "bg-emerald-400 text-emerald-950 hover:bg-emerald-300")}>
+                                Files
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {morePanel === "annotations" ? (
+                <div className="space-y-2">
+                  {pageAnnotations.length === 0 ? <p className="text-sm text-white/60">No annotations on this page yet.</p> : null}
+                  {pageAnnotations.map((annotation) => (
+                    <div key={annotation.id} className="rounded-lg border border-white/10 bg-white/8 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black">{annotation.user_name_snapshot}</p>
+                          <p className="text-xs text-white/55">{annotation.annotation_type} | {annotation.role_snapshot}</p>
+                        </div>
+                        <span className="h-5 w-5 shrink-0 rounded-full border border-white/40" style={{ backgroundColor: annotation.color }} />
+                      </div>
+                      {canUsePresenterControls ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <Button onClick={() => updateAnnotation(annotation, { color })} size="sm" type="button" variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950">
+                            Color
+                          </Button>
+                          {annotation.annotation_type === "text" ? (
+                            <Button
+                              onClick={() => {
+                                const nextText = window.prompt("Edit annotation text", String(annotation.payload.text ?? ""));
+                                if (nextText?.trim()) {
+                                  void updateAnnotation(annotation, {
+                                    payload: { ...annotation.payload, text: nextText.trim() }
+                                  });
+                                }
+                              }}
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                              className="rounded-xl border-white/15 bg-white/10 text-white hover:bg-white hover:text-slate-950"
+                            >
+                              Text
+                            </Button>
+                          ) : (
+                            <Button disabled size="sm" type="button" variant="outline" className="rounded-xl border-white/15 bg-white/10 text-white">
+                              Shape
+                            </Button>
+                          )}
+                          <Button className="col-span-2 rounded-xl border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500 hover:text-white" onClick={() => deleteAnnotation(annotation)} size="sm" type="button" variant="outline">
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            Remove
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
