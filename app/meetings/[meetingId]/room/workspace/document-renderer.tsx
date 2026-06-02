@@ -58,7 +58,7 @@ export function DocumentRenderer({
     const observer = new ResizeObserver(resize);
     observer.observe(container);
     return () => observer.disconnect();
-  }, []);
+  }, [sourceHeight, sourceWidth]);
 
   useEffect(() => {
     onSizeChange({

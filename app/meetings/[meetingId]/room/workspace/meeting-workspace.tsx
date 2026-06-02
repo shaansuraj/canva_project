@@ -435,6 +435,8 @@ export function MeetingWorkspace({
 
   const applyAnnotationDraftPayload = useCallback(
     (payload: Record<string, unknown> | null | undefined) => {
+      if (!payload) return;
+
       const sourceUserId = typeof payload?.sourceUserId === "string" ? payload.sourceUserId : null;
       const id = typeof payload?.id === "string" ? payload.id : null;
       if (!sourceUserId || !id || sourceUserId === profile.id) return;

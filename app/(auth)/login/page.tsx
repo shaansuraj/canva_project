@@ -1,12 +1,13 @@
 import { LoginForm } from "./login-form";
 import { APP_NAME } from "@/lib/constants";
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams
 }: {
-  searchParams?: { error?: string; next?: string };
+  searchParams?: Promise<{ error?: string; next?: string }>;
 }) {
-  const inactive = searchParams?.error === "inactive";
+  const resolvedSearchParams = await searchParams;
+  const inactive = resolvedSearchParams?.error === "inactive";
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-8 sm:px-6">
@@ -39,7 +40,7 @@ export default function LoginPage({
             </div>
           </div>
         </div>
-        <LoginForm appName={APP_NAME} inactive={inactive} nextPath={searchParams?.next} />
+        <LoginForm appName={APP_NAME} inactive={inactive} nextPath={resolvedSearchParams?.next} />
       </section>
     </main>
   );
